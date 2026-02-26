@@ -130,8 +130,29 @@ class InstagramService {
                 val message = loginJson["message"]?.jsonPrimitive?.content
                 val twoFactorRequired = loginJson["two_factor_required"]?.jsonPrimitive?.content?.toBooleanStrictOrNull() ?: false
 
+                if (twoFactorRequired) {
+                    val twoFactorInfo = loginJson["two_factor_info"]?.jsonObject
+                    val identifier = twoFactorInfo?.get("two_factor_identifier")?.jsonPrimitive?.content ?: ""
+                    val obfuscatedPhone = twoFactorInfo?.get("obfuscated_phone_number")?.jsonPrimitive?.content ?: ""
+                    val totpEnabled = twoFactorInfo?.get("totp_two_factor_on")?.jsonPrimitive?.content?.toBooleanStrictOrNull() ?: false
+                    val smsEnabled = twoFactorInfo?.get("sms_two_factor_on")?.jsonPrimitive?.content?.toBooleanStrictOrNull() ?: false
+
+                    // Update CSRF token from response cookies
+                    val postCookies = cookieStorage.get(Url(BASE_URL))
+                    csrfToken = postCookies.find { it.name == "csrftoken" }?.value ?: csrfToken
+
+                    return@withContext DownloadResult.TwoFactorRequired(
+                        TwoFactorInfo(
+                            identifier = identifier,
+                            username = username,
+                            obfuscatedPhone = obfuscatedPhone,
+                            totpEnabled = totpEnabled,
+                            smsEnabled = smsEnabled
+                        )
+                    )
+                }
+
                 return@withContext when {
-                    twoFactorRequired -> DownloadResult.Error("Zwei-Faktor-Authentifizierung erforderlich. Bitte deaktiviere 2FA vorübergehend.")
                     message != null -> DownloadResult.Error("Login fehlgeschlagen: $message")
                     else -> DownloadResult.Error("Login fehlgeschlagen: Ungültiger Benutzername oder Passwort")
                 }
@@ -146,6 +167,67 @@ class InstagramService {
             DownloadResult.Success("Erfolgreich eingeloggt als $username")
         } catch (e: Exception) {
             DownloadResult.Error("Login-Fehler: ${e.message}")
+        }
+    }
+
+    /**
+     * Verifies the 2FA code to complete login.
+     * Supports both TOTP (authenticator app) and SMS codes.
+     */
+    suspend fun verifyTwoFactor(
+        code: String,
+        identifier: String,
+        username: String,
+        useTOTP: Boolean = true
+    ): DownloadResult<String> = withContext(Dispatchers.IO) {
+        try {
+            val verificationMethod = if (useTOTP) "1" else "1" // 1 = TOTP/SMS code
+
+            val response = client.post("$BASE_URL/accounts/login/ajax/two_factor/") {
+                headers {
+                    append(HttpHeaders.UserAgent, USER_AGENT)
+                    append(HttpHeaders.Accept, "*/*")
+                    append(HttpHeaders.AcceptLanguage, "de-DE,de;q=0.9,en-US;q=0.8,en;q=0.7")
+                    append(HttpHeaders.ContentType, "application/x-www-form-urlencoded")
+                    append("X-CSRFToken", csrfToken)
+                    append("X-IG-App-ID", IG_APP_ID)
+                    append("X-ASBD-ID", "129477")
+                    append("X-IG-WWW-Claim", "0")
+                    append("X-Requested-With", "XMLHttpRequest")
+                    append(HttpHeaders.Referrer, "$BASE_URL/accounts/login/two_factor/")
+                    append(HttpHeaders.Origin, BASE_URL)
+                    append("Sec-Fetch-Dest", "empty")
+                    append("Sec-Fetch-Mode", "cors")
+                    append("Sec-Fetch-Site", "same-origin")
+                }
+                setBody(FormDataContent(Parameters.build {
+                    append("username", username)
+                    append("verificationCode", code.replace("\\s".toRegex(), ""))
+                    append("identifier", identifier)
+                    append("queryParams", "{}")
+                    append("trust_signal", "true")
+                    append("verification_method", verificationMethod)
+                }))
+            }
+
+            val body = response.bodyAsText()
+            val jsonResponse = json.decodeFromString<JsonObject>(body)
+
+            val authenticated = jsonResponse["authenticated"]?.jsonPrimitive?.content?.toBooleanStrictOrNull() ?: false
+            val userId = jsonResponse["userId"]?.jsonPrimitive?.content ?: ""
+
+            if (authenticated) {
+                val postLoginCookies = cookieStorage.get(Url(BASE_URL))
+                csrfToken = postLoginCookies.find { it.name == "csrftoken" }?.value ?: csrfToken
+                sessionUserId = userId
+                isLoggedIn = true
+                DownloadResult.Success("Erfolgreich eingeloggt als $username")
+            } else {
+                val message = jsonResponse["message"]?.jsonPrimitive?.content
+                DownloadResult.Error(message ?: "Ungültiger Bestätigungscode")
+            }
+        } catch (e: Exception) {
+            DownloadResult.Error("2FA-Fehler: ${e.message}")
         }
     }
 

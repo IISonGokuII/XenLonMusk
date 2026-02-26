@@ -23,6 +23,8 @@ class MainActivity : ComponentActivity() {
                 val currentScreen by viewModel.currentScreen.collectAsState()
                 val isLoginLoading by viewModel.isLoginLoading.collectAsState()
                 val loginError by viewModel.loginError.collectAsState()
+                val isTwoFactorPending by viewModel.isTwoFactorPending.collectAsState()
+                val twoFactorInfo by viewModel.twoFactorInfo.collectAsState()
                 val currentProfile by viewModel.currentProfile.collectAsState()
                 val stories by viewModel.stories.collectAsState()
                 val highlights by viewModel.highlights.collectAsState()
@@ -38,8 +40,12 @@ class MainActivity : ComponentActivity() {
                         LoginScreen(
                             onLogin = { username, password -> viewModel.login(username, password) },
                             onAnonymousMode = { viewModel.enterAnonymousMode() },
+                            onVerifyTwoFactor = { code -> viewModel.verifyTwoFactor(code) },
+                            onCancelTwoFactor = { viewModel.cancelTwoFactor() },
                             isLoading = isLoginLoading,
-                            errorMessage = loginError
+                            errorMessage = loginError,
+                            isTwoFactorPending = isTwoFactorPending,
+                            twoFactorInfo = twoFactorInfo
                         )
                     }
 

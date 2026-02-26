@@ -91,12 +91,24 @@ data class GalleryItem(
 )
 
 /**
+ * Data for a pending 2FA verification.
+ */
+data class TwoFactorInfo(
+    val identifier: String,
+    val username: String,
+    val obfuscatedPhone: String = "",
+    val totpEnabled: Boolean = false,
+    val smsEnabled: Boolean = false
+)
+
+/**
  * Result wrapper for API operations.
  */
 sealed class DownloadResult<out T> {
     data class Success<T>(val data: T) : DownloadResult<T>()
     data class Error(val message: String, val code: Int = -1) : DownloadResult<Nothing>()
     data object Loading : DownloadResult<Nothing>()
+    data class TwoFactorRequired(val twoFactorInfo: TwoFactorInfo) : DownloadResult<Nothing>()
 }
 
 // --- JSON response models for Instagram's public API ---

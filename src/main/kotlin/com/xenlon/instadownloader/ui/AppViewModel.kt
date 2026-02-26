@@ -68,6 +68,13 @@ class AppViewModel {
     private val _isOwnProfile = MutableStateFlow(false)
     val isOwnProfile: StateFlow<Boolean> = _isOwnProfile.asStateFlow()
 
+    // 2FA state
+    private val _twoFactorInfo = MutableStateFlow<TwoFactorInfo?>(null)
+    val twoFactorInfo: StateFlow<TwoFactorInfo?> = _twoFactorInfo.asStateFlow()
+
+    private val _isTwoFactorPending = MutableStateFlow(false)
+    val isTwoFactorPending: StateFlow<Boolean> = _isTwoFactorPending.asStateFlow()
+
     // Gallery state
     private val _galleryItems = MutableStateFlow<List<GalleryItem>>(emptyList())
     val galleryItems: StateFlow<List<GalleryItem>> = _galleryItems.asStateFlow()
@@ -77,6 +84,7 @@ class AppViewModel {
 
     /**
      * Attempts to log in with the given credentials.
+     * If 2FA is required, sets twoFactorInfo and isTwoFactorPending.
      */
     fun login(username: String, password: String) {
         scope.launch {
@@ -88,6 +96,14 @@ class AppViewModel {
                     loggedInUsername = username
                     _currentScreen.value = Screen.MAIN
                     _loginError.value = null
+                    _isTwoFactorPending.value = false
+                    _twoFactorInfo.value = null
+                }
+                is DownloadResult.TwoFactorRequired -> {
+                    loggedInUsername = username
+                    _twoFactorInfo.value = result.twoFactorInfo
+                    _isTwoFactorPending.value = true
+                    _loginError.value = null
                 }
                 is DownloadResult.Error -> {
                     _loginError.value = result.message
@@ -97,6 +113,47 @@ class AppViewModel {
 
             _isLoginLoading.value = false
         }
+    }
+
+    /**
+     * Verifies the 2FA code to complete login.
+     */
+    fun verifyTwoFactor(code: String) {
+        val info = _twoFactorInfo.value ?: return
+        scope.launch {
+            _isLoginLoading.value = true
+            _loginError.value = null
+
+            when (val result = instagramService.verifyTwoFactor(
+                code = code,
+                identifier = info.identifier,
+                username = info.username,
+                useTOTP = info.totpEnabled
+            )) {
+                is DownloadResult.Success -> {
+                    loggedInUsername = info.username
+                    _currentScreen.value = Screen.MAIN
+                    _loginError.value = null
+                    _isTwoFactorPending.value = false
+                    _twoFactorInfo.value = null
+                }
+                is DownloadResult.Error -> {
+                    _loginError.value = result.message
+                }
+                else -> {}
+            }
+
+            _isLoginLoading.value = false
+        }
+    }
+
+    /**
+     * Cancels the 2FA flow and returns to login.
+     */
+    fun cancelTwoFactor() {
+        _isTwoFactorPending.value = false
+        _twoFactorInfo.value = null
+        _loginError.value = null
     }
 
     /**
@@ -385,6 +442,8 @@ class AppViewModel {
             _isOwnProfile.value = false
             _loginError.value = null
             _isAnonymousMode.value = false
+            _isTwoFactorPending.value = false
+            _twoFactorInfo.value = null
             loggedInUsername = ""
         }
     }
