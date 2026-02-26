@@ -31,6 +31,7 @@ fun MainScreen(
     profile: UserProfile?,
     stories: DownloadResult<List<StoryItem>>,
     highlights: DownloadResult<List<HighlightReel>>,
+    feedPosts: DownloadResult<List<FeedPost>>,
     downloadProgress: DownloadProgress,
     isAnonymousMode: Boolean = false,
     onSearchUser: (String) -> Unit,
@@ -38,6 +39,7 @@ fun MainScreen(
     onDownloadStories: () -> Unit,
     onDownloadHighlight: (HighlightReel) -> Unit,
     onDownloadAllHighlights: () -> Unit,
+    onDownloadFeedPosts: () -> Unit,
     onLogout: () -> Unit,
     onOpenDownloadFolder: () -> Unit
 ) {
@@ -118,7 +120,7 @@ fun MainScreen(
                             modifier = Modifier.size(20.dp)
                         )
                         Text(
-                            "Anonymer Modus - Profilsuche & Profilbilder ohne Login. " +
+                            "Anonymer Modus - Profilsuche, Profilbilder & gepostete Bilder ohne Login. " +
                                 "Für Stories & Highlights melde dich an.",
                             color = TextSecondary,
                             fontSize = 13.sp,
@@ -183,6 +185,12 @@ fun MainScreen(
                         onDownloadAllHighlights = onDownloadAllHighlights
                     )
                 }
+
+                // Feed posts section (works in both modes)
+                FeedPostsSection(
+                    feedPosts = feedPosts,
+                    onDownloadPosts = onDownloadFeedPosts
+                )
             } else if (!isSearching) {
                 // Welcome card
                 WelcomeCard()
@@ -737,11 +745,12 @@ private fun WelcomeCard() {
             Spacer(modifier = Modifier.height(24.dp))
 
             Row(
-                horizontalArrangement = Arrangement.spacedBy(24.dp)
+                horizontalArrangement = Arrangement.spacedBy(20.dp)
             ) {
                 FeatureChip(Icons.Default.AutoStories, "Stories")
                 FeatureChip(Icons.Default.Stars, "Highlights")
                 FeatureChip(Icons.Default.AccountCircle, "Profilbilder")
+                FeatureChip(Icons.Default.GridView, "Posts")
             }
         }
     }
@@ -785,6 +794,107 @@ private fun EmptyMessage(message: String) {
         Icon(Icons.Default.Info, contentDescription = null, tint = TextSecondary, modifier = Modifier.size(18.dp))
         Spacer(modifier = Modifier.width(8.dp))
         Text(message, color = TextSecondary, fontSize = 14.sp)
+    }
+}
+
+@Composable
+private fun FeedPostsSection(
+    feedPosts: DownloadResult<List<FeedPost>>,
+    onDownloadPosts: () -> Unit
+) {
+    SectionCard(
+        title = "Gepostete Bilder",
+        icon = Icons.Default.GridView,
+        gradientColors = listOf(InstagramOrange, InstagramYellow)
+    ) {
+        when (feedPosts) {
+            is DownloadResult.Loading -> {
+                Box(modifier = Modifier.fillMaxWidth().padding(20.dp), contentAlignment = Alignment.Center) {
+                    CircularProgressIndicator(color = InstagramOrange, modifier = Modifier.size(24.dp))
+                }
+            }
+            is DownloadResult.Error -> {
+                ErrorMessage(feedPosts.message)
+            }
+            is DownloadResult.Success -> {
+                val posts = feedPosts.data
+                if (posts.isEmpty()) {
+                    EmptyMessage("Keine Posts vorhanden")
+                } else {
+                    Column {
+                        val totalMedia = posts.sumOf { it.mediaUrls.size }
+                        val videoCount = posts.count { it.type == MediaType.VIDEO }
+                        val carouselCount = posts.count { it.isCarousel }
+                        val imageCount = posts.size - videoCount - carouselCount
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                "${posts.size} Post${if (posts.size != 1) "s" else ""} gefunden",
+                                color = TextSecondary,
+                                fontSize = 14.sp
+                            )
+                            Text(
+                                buildString {
+                                    if (imageCount > 0) append("$imageCount Bilder")
+                                    if (videoCount > 0) {
+                                        if (isNotEmpty()) append(", ")
+                                        append("$videoCount Videos")
+                                    }
+                                    if (carouselCount > 0) {
+                                        if (isNotEmpty()) append(", ")
+                                        append("$carouselCount Karussells")
+                                    }
+                                    append(" ($totalMedia Dateien)")
+                                },
+                                color = TextSecondary,
+                                fontSize = 12.sp
+                            )
+                        }
+
+                        Spacer(modifier = Modifier.height(12.dp))
+
+                        Button(
+                            onClick = onDownloadPosts,
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(12.dp),
+                            colors = ButtonDefaults.buttonColors(containerColor = InstagramOrange)
+                        ) {
+                            Icon(Icons.Default.Download, contentDescription = null, modifier = Modifier.size(20.dp))
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                "Alle Posts herunterladen ($totalMedia Dateien)",
+                                fontWeight = FontWeight.SemiBold
+                            )
+                        }
+
+                        Spacer(modifier = Modifier.height(8.dp))
+
+                        // Info about anonymous access
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            Icon(
+                                Icons.Default.VisibilityOff,
+                                contentDescription = null,
+                                tint = SuccessGreen,
+                                modifier = Modifier.size(14.dp)
+                            )
+                            Text(
+                                "Anonym - Der Benutzer sieht nicht, dass du seine Posts heruntergeladen hast.",
+                                color = TextSecondary,
+                                fontSize = 11.sp,
+                                lineHeight = 14.sp
+                            )
+                        }
+                    }
+                }
+            }
+        }
     }
 }
 

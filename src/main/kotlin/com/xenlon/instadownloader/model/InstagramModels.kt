@@ -62,6 +62,22 @@ data class HighlightReel(
 )
 
 /**
+ * Represents a feed post (image/video/carousel posted to the profile grid).
+ */
+data class FeedPost(
+    val id: String,
+    val shortcode: String = "",
+    val mediaUrls: List<String> = emptyList(),
+    val thumbnailUrl: String = "",
+    val type: MediaType = MediaType.IMAGE,
+    val isCarousel: Boolean = false,
+    val caption: String = "",
+    val timestamp: Long = 0,
+    val likeCount: Long = 0,
+    val commentCount: Long = 0
+)
+
+/**
  * Result wrapper for API operations.
  */
 sealed class DownloadResult<out T> {

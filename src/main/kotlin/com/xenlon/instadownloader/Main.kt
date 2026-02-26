@@ -32,6 +32,7 @@ fun main() = application {
             val currentProfile by viewModel.currentProfile.collectAsState()
             val stories by viewModel.stories.collectAsState()
             val highlights by viewModel.highlights.collectAsState()
+            val feedPosts by viewModel.feedPosts.collectAsState()
             val downloadProgress by viewModel.downloadProgress.collectAsState()
             val isAnonymousMode by viewModel.isAnonymousMode.collectAsState()
 
@@ -50,6 +51,7 @@ fun main() = application {
                         profile = currentProfile,
                         stories = stories,
                         highlights = highlights,
+                        feedPosts = feedPosts,
                         downloadProgress = downloadProgress,
                         isAnonymousMode = isAnonymousMode,
                         onSearchUser = { viewModel.searchUser(it) },
@@ -57,6 +59,7 @@ fun main() = application {
                         onDownloadStories = { viewModel.downloadStories() },
                         onDownloadHighlight = { viewModel.downloadHighlight(it) },
                         onDownloadAllHighlights = { viewModel.downloadAllHighlights() },
+                        onDownloadFeedPosts = { viewModel.downloadFeedPosts() },
                         onLogout = { viewModel.logout() },
                         onOpenDownloadFolder = { viewModel.openDownloadFolder() }
                     )

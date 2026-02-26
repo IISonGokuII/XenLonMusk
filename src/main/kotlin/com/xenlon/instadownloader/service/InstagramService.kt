@@ -418,6 +418,106 @@ class InstagramService {
     }
 
     /**
+     * Fetches feed posts (posted images/videos) for a user.
+     * Works both anonymously (public profiles) and authenticated.
+     */
+    suspend fun fetchFeedPosts(username: String): DownloadResult<List<FeedPost>> = withContext(Dispatchers.IO) {
+        try {
+            // Use the web profile endpoint which includes edge_owner_to_timeline_media
+            val response = client.get("$BASE_URL/api/v1/users/web_profile_info/") {
+                parameter("username", username)
+                if (isLoggedIn) addAuthHeaders("$BASE_URL/$username/")
+                else addAnonHeaders("$BASE_URL/$username/")
+            }
+
+            if (response.status != HttpStatusCode.OK) {
+                return@withContext DownloadResult.Error(
+                    "Feed konnte nicht geladen werden (HTTP ${response.status.value})",
+                    response.status.value
+                )
+            }
+
+            val body = response.bodyAsText()
+            val jsonResponse = json.decodeFromString<JsonObject>(body)
+
+            val userData = jsonResponse["data"]?.jsonObject?.get("user")?.jsonObject
+                ?: return@withContext DownloadResult.Error("Benutzer nicht gefunden")
+
+            val isPrivate = userData["is_private"]?.jsonPrimitive?.content?.toBooleanStrictOrNull() ?: false
+            if (isPrivate && !isLoggedIn) {
+                return@withContext DownloadResult.Error("Privates Profil - Login erforderlich, um Posts zu sehen")
+            }
+
+            val edges = userData["edge_owner_to_timeline_media"]?.jsonObject
+                ?.get("edges")?.jsonArray
+
+            if (edges.isNullOrEmpty()) {
+                return@withContext DownloadResult.Success(emptyList())
+            }
+
+            val posts = edges.mapNotNull { edgeJson ->
+                val node = edgeJson.jsonObject["node"]?.jsonObject ?: return@mapNotNull null
+                val typename = node["__typename"]?.jsonPrimitive?.content ?: ""
+                val isVideo = node["is_video"]?.jsonPrimitive?.content?.toBooleanStrictOrNull() ?: false
+                val isCarousel = typename == "GraphSidecar"
+
+                // Collect media URLs
+                val mediaUrls = mutableListOf<String>()
+
+                if (isCarousel) {
+                    // Carousel: multiple images/videos
+                    val sidecarEdges = node["edge_sidecar_to_children"]?.jsonObject
+                        ?.get("edges")?.jsonArray
+                    sidecarEdges?.forEach { sidecarEdge ->
+                        val childNode = sidecarEdge.jsonObject["node"]?.jsonObject
+                        val childIsVideo = childNode?.get("is_video")?.jsonPrimitive?.content?.toBooleanStrictOrNull() ?: false
+                        val url = if (childIsVideo) {
+                            childNode?.get("video_url")?.jsonPrimitive?.content ?: ""
+                        } else {
+                            childNode?.get("display_url")?.jsonPrimitive?.content ?: ""
+                        }
+                        if (url.isNotEmpty()) mediaUrls.add(url)
+                    }
+                } else {
+                    // Single image or video
+                    val url = if (isVideo) {
+                        node["video_url"]?.jsonPrimitive?.content ?: ""
+                    } else {
+                        node["display_url"]?.jsonPrimitive?.content ?: ""
+                    }
+                    if (url.isNotEmpty()) mediaUrls.add(url)
+                }
+
+                val caption = node["edge_media_to_caption"]?.jsonObject
+                    ?.get("edges")?.jsonArray
+                    ?.firstOrNull()?.jsonObject
+                    ?.get("node")?.jsonObject
+                    ?.get("text")?.jsonPrimitive?.content ?: ""
+
+                FeedPost(
+                    id = node["id"]?.jsonPrimitive?.content ?: "",
+                    shortcode = node["shortcode"]?.jsonPrimitive?.content ?: "",
+                    mediaUrls = mediaUrls,
+                    thumbnailUrl = node["thumbnail_src"]?.jsonPrimitive?.content
+                        ?: node["display_url"]?.jsonPrimitive?.content ?: "",
+                    type = if (isVideo) MediaType.VIDEO else MediaType.IMAGE,
+                    isCarousel = isCarousel,
+                    caption = caption,
+                    timestamp = node["taken_at_timestamp"]?.jsonPrimitive?.longOrNull ?: 0,
+                    likeCount = node["edge_liked_by"]?.jsonObject?.get("count")?.jsonPrimitive?.longOrNull
+                        ?: node["edge_media_preview_like"]?.jsonObject?.get("count")?.jsonPrimitive?.longOrNull ?: 0,
+                    commentCount = node["edge_media_to_comment"]?.jsonObject?.get("count")?.jsonPrimitive?.longOrNull
+                        ?: node["edge_media_preview_comment"]?.jsonObject?.get("count")?.jsonPrimitive?.longOrNull ?: 0
+                )
+            }
+
+            DownloadResult.Success(posts)
+        } catch (e: Exception) {
+            DownloadResult.Error("Fehler beim Laden der Posts: ${e.message}")
+        }
+    }
+
+    /**
      * Downloads a file from a URL and saves it to the specified path.
      */
     suspend fun downloadFile(url: String, outputPath: String): DownloadResult<String> = withContext(Dispatchers.IO) {

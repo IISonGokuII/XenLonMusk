@@ -47,6 +47,10 @@ class AppViewModel {
     private val _highlights = MutableStateFlow<DownloadResult<List<HighlightReel>>>(DownloadResult.Loading)
     val highlights: StateFlow<DownloadResult<List<HighlightReel>>> = _highlights.asStateFlow()
 
+    // Feed posts state
+    private val _feedPosts = MutableStateFlow<DownloadResult<List<FeedPost>>>(DownloadResult.Loading)
+    val feedPosts: StateFlow<DownloadResult<List<FeedPost>>> = _feedPosts.asStateFlow()
+
     // Download progress
     val downloadProgress: StateFlow<DownloadProgress> = downloadManager.downloadProgress
 
@@ -89,14 +93,20 @@ class AppViewModel {
             _currentProfile.value = null
             _stories.value = DownloadResult.Loading
             _highlights.value = DownloadResult.Loading
+            _feedPosts.value = DownloadResult.Loading
 
             when (val result = instagramService.fetchUserProfile(username)) {
                 is DownloadResult.Success -> {
                     _currentProfile.value = result.data
                     val userId = result.data.userId
 
-                    if (userId.isNotEmpty()) {
-                        // Fetch stories and highlights in parallel
+                    // Always fetch feed posts (works anonymously for public profiles)
+                    launch {
+                        _feedPosts.value = instagramService.fetchFeedPosts(username)
+                    }
+
+                    if (userId.isNotEmpty() && !_isAnonymousMode.value) {
+                        // Fetch stories and highlights in parallel (requires login)
                         launch {
                             _stories.value = instagramService.fetchStories(userId)
                         }
@@ -109,6 +119,7 @@ class AppViewModel {
                     _currentProfile.value = null
                     _stories.value = DownloadResult.Error(result.message)
                     _highlights.value = DownloadResult.Error(result.message)
+                    _feedPosts.value = DownloadResult.Error(result.message)
                 }
                 else -> {}
             }
@@ -149,6 +160,19 @@ class AppViewModel {
     }
 
     /**
+     * Downloads all feed posts of the current user.
+     */
+    fun downloadFeedPosts() {
+        val profile = _currentProfile.value ?: return
+        val postsResult = _feedPosts.value
+        if (postsResult !is DownloadResult.Success) return
+
+        scope.launch {
+            downloadManager.downloadFeedPosts(profile, postsResult.data)
+        }
+    }
+
+    /**
      * Downloads all highlights.
      */
     fun downloadAllHighlights() {
@@ -173,6 +197,7 @@ class AppViewModel {
             _currentProfile.value = null
             _stories.value = DownloadResult.Loading
             _highlights.value = DownloadResult.Loading
+            _feedPosts.value = DownloadResult.Loading
             _loginError.value = null
             _isAnonymousMode.value = false
         }
