@@ -1,18 +1,12 @@
 package com.xenlon.instadownloader
 
-import android.content.Intent
 import android.os.Bundle
-import android.os.Environment
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.systemBarsPadding
 import androidx.compose.runtime.*
-import androidx.compose.ui.Modifier
 import com.xenlon.instadownloader.ui.*
-import java.io.File
 
 class MainActivity : ComponentActivity() {
 
@@ -37,6 +31,7 @@ class MainActivity : ComponentActivity() {
                 val downloadProgress by viewModel.downloadProgress.collectAsState()
                 val isAnonymousMode by viewModel.isAnonymousMode.collectAsState()
                 val isOwnProfile by viewModel.isOwnProfile.collectAsState()
+                val galleryItems by viewModel.galleryItems.collectAsState()
 
                 when (currentScreen) {
                     AppViewModel.Screen.LOGIN -> {
@@ -66,36 +61,29 @@ class MainActivity : ComponentActivity() {
                             onDownloadFeedPosts = { viewModel.downloadFeedPosts() },
                             onDownloadArchivedPosts = { viewModel.downloadArchivedPosts() },
                             onLogout = { viewModel.logout() },
-                            onOpenDownloadFolder = { openDownloadFolder() }
+                            onOpenGallery = { viewModel.openGallery() }
+                        )
+                    }
+
+                    AppViewModel.Screen.GALLERY -> {
+                        val context = this@MainActivity
+                        GalleryScreen(
+                            galleryItems = galleryItems,
+                            onBack = { viewModel.closeGallery() },
+                            onRefresh = { viewModel.loadGalleryItems() },
+                            onSaveToGallery = { item ->
+                                viewModel.saveToSystemGallery(context, item)
+                                Toast.makeText(
+                                    context,
+                                    "In Galerie gespeichert",
+                                    Toast.LENGTH_SHORT
+                                ).show()
+                            },
+                            onDeleteItem = { viewModel.deleteGalleryItem(it) }
                         )
                     }
                 }
             }
-        }
-    }
-
-    private fun openDownloadFolder() {
-        val downloadsDir = File(
-            Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS),
-            "InstaDownloader"
-        )
-        downloadsDir.mkdirs()
-
-        try {
-            val intent = Intent(Intent.ACTION_VIEW).apply {
-                setDataAndType(
-                    android.net.Uri.parse("content://com.android.externalstorage.documents/document/primary:Download%2FInstaDownloader"),
-                    "vnd.android.document/directory"
-                )
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            }
-            startActivity(intent)
-        } catch (_: Exception) {
-            Toast.makeText(
-                this,
-                "Downloads gespeichert in: Downloads/InstaDownloader",
-                Toast.LENGTH_LONG
-            ).show()
         }
     }
 

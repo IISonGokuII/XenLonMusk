@@ -33,6 +33,7 @@ class DownloadManager(
 
     /**
      * Gets the default download directory (Downloads/InstaDownloader on Android).
+     * Creates a .nomedia file to hide content from the system gallery.
      */
     fun getDownloadDir(): String {
         val downloadsDir = android.os.Environment.getExternalStoragePublicDirectory(
@@ -40,6 +41,11 @@ class DownloadManager(
         )
         val dir = File(downloadsDir, "InstaDownloader")
         dir.mkdirs()
+        // .nomedia prevents Android MediaScanner from indexing these files
+        val nomedia = File(dir, ".nomedia")
+        if (!nomedia.exists()) {
+            nomedia.createNewFile()
+        }
         return dir.absolutePath
     }
 

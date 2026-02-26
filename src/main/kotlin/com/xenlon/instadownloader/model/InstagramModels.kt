@@ -78,6 +78,19 @@ data class FeedPost(
 )
 
 /**
+ * Represents a downloaded file in the in-app gallery.
+ */
+data class GalleryItem(
+    val file: java.io.File,
+    val name: String,
+    val isVideo: Boolean,
+    val sizeBytes: Long,
+    val lastModified: Long,
+    val username: String = "",
+    val category: String = "" // stories, highlights, posts, archive, profile
+)
+
+/**
  * Result wrapper for API operations.
  */
 sealed class DownloadResult<out T> {

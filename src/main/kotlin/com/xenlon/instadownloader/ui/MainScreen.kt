@@ -44,7 +44,7 @@ fun MainScreen(
     onDownloadFeedPosts: () -> Unit,
     onDownloadArchivedPosts: () -> Unit,
     onLogout: () -> Unit,
-    onOpenDownloadFolder: () -> Unit
+    onOpenGallery: () -> Unit
 ) {
     var searchQuery by remember { mutableStateOf("") }
     var isSearching by remember { mutableStateOf(false) }
@@ -85,8 +85,8 @@ fun MainScreen(
                 }
             },
             actions = {
-                IconButton(onClick = onOpenDownloadFolder) {
-                    Icon(Icons.Default.FolderOpen, "Downloads öffnen", tint = TextSecondary)
+                IconButton(onClick = onOpenGallery) {
+                    Icon(Icons.Default.PhotoLibrary, "Galerie", tint = TextSecondary)
                 }
                 IconButton(onClick = onLogout) {
                     Icon(Icons.Default.Logout, "Abmelden", tint = TextSecondary)
