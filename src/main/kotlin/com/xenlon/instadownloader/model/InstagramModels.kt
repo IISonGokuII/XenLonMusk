@@ -91,6 +91,17 @@ data class GalleryItem(
 )
 
 /**
+ * Represents a search history entry for quick profile access.
+ */
+data class SearchHistoryEntry(
+    val username: String,
+    val fullName: String = "",
+    val profilePicUrl: String = "",
+    val isFavorite: Boolean = false,
+    val lastSearched: Long = System.currentTimeMillis()
+)
+
+/**
  * Data for a pending 2FA verification.
  */
 data class TwoFactorInfo(

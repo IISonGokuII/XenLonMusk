@@ -1,5 +1,6 @@
 package com.xenlon.instadownloader
 
+import android.content.Intent
 import android.os.Bundle
 import android.widget.Toast
 import androidx.activity.ComponentActivity
@@ -16,7 +17,10 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
 
-        viewModel = AppViewModel()
+        viewModel = AppViewModel(applicationContext)
+
+        // Handle share intent on launch
+        handleIntent(intent)
 
         setContent {
             InstaDownloaderTheme {
@@ -30,10 +34,15 @@ class MainActivity : ComponentActivity() {
                 val highlights by viewModel.highlights.collectAsState()
                 val feedPosts by viewModel.feedPosts.collectAsState()
                 val archivedPosts by viewModel.archivedPosts.collectAsState()
+                val reels by viewModel.reels.collectAsState()
+                val savedPosts by viewModel.savedPosts.collectAsState()
+                val taggedPosts by viewModel.taggedPosts.collectAsState()
+                val sharedPost by viewModel.sharedPost.collectAsState()
                 val downloadProgress by viewModel.downloadProgress.collectAsState()
                 val isAnonymousMode by viewModel.isAnonymousMode.collectAsState()
                 val isOwnProfile by viewModel.isOwnProfile.collectAsState()
                 val galleryItems by viewModel.galleryItems.collectAsState()
+                val searchHistory by viewModel.searchHistory.collectAsState()
 
                 when (currentScreen) {
                     AppViewModel.Screen.LOGIN -> {
@@ -56,9 +65,14 @@ class MainActivity : ComponentActivity() {
                             highlights = highlights,
                             feedPosts = feedPosts,
                             archivedPosts = archivedPosts,
+                            reels = reels,
+                            savedPosts = savedPosts,
+                            taggedPosts = taggedPosts,
+                            sharedPost = sharedPost,
                             downloadProgress = downloadProgress,
                             isAnonymousMode = isAnonymousMode,
                             isOwnProfile = isOwnProfile,
+                            searchHistory = searchHistory,
                             onSearchUser = { viewModel.searchUser(it) },
                             onDownloadProfilePic = { viewModel.downloadProfilePicture() },
                             onDownloadStories = { viewModel.downloadStories() },
@@ -66,6 +80,13 @@ class MainActivity : ComponentActivity() {
                             onDownloadAllHighlights = { viewModel.downloadAllHighlights() },
                             onDownloadFeedPosts = { viewModel.downloadFeedPosts() },
                             onDownloadArchivedPosts = { viewModel.downloadArchivedPosts() },
+                            onDownloadReels = { viewModel.downloadReels() },
+                            onDownloadSavedPosts = { viewModel.downloadSavedPosts() },
+                            onDownloadTaggedPosts = { viewModel.downloadTaggedPosts() },
+                            onDownloadSharedPost = { viewModel.downloadSharedPost() },
+                            onDismissSharedPost = { viewModel.dismissSharedPost() },
+                            onToggleFavorite = { viewModel.toggleFavorite(it) },
+                            onRemoveFromHistory = { viewModel.removeFromHistory(it) },
                             onLogout = { viewModel.logout() },
                             onOpenGallery = { viewModel.openGallery() }
                         )
@@ -88,6 +109,34 @@ class MainActivity : ComponentActivity() {
                             onDeleteItem = { viewModel.deleteGalleryItem(it) }
                         )
                     }
+                }
+            }
+        }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        handleIntent(intent)
+    }
+
+    private fun handleIntent(intent: Intent?) {
+        if (intent == null) return
+
+        when (intent.action) {
+            Intent.ACTION_SEND -> {
+                if (intent.type == "text/plain") {
+                    val sharedText = intent.getStringExtra(Intent.EXTRA_TEXT)
+                    if (sharedText != null && sharedText.contains("instagram.com")) {
+                        viewModel.handleShareIntent(sharedText)
+                        Toast.makeText(this, "Instagram-Link erkannt", Toast.LENGTH_SHORT).show()
+                    }
+                }
+            }
+            Intent.ACTION_VIEW -> {
+                val uri = intent.data
+                if (uri != null && uri.host?.contains("instagram.com") == true) {
+                    viewModel.handleShareIntent(uri.toString())
+                    Toast.makeText(this, "Instagram-Link erkannt", Toast.LENGTH_SHORT).show()
                 }
             }
         }

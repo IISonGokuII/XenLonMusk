@@ -2,6 +2,7 @@ package com.xenlon.instadownloader.ui
 
 import android.content.ContentValues
 import android.content.Context
+import android.content.SharedPreferences
 import android.media.MediaScannerConnection
 import android.os.Environment
 import android.provider.MediaStore
@@ -13,16 +14,18 @@ import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.serialization.json.*
 import java.io.File
 
-/**
- * ViewModel managing the application state and coordinating between UI and services.
- */
-class AppViewModel {
+class AppViewModel(private val appContext: Context) {
 
     private val instagramService = InstagramService()
     private val downloadManager = DownloadManager(instagramService)
     private val scope = CoroutineScope(Dispatchers.Main + SupervisorJob())
+    private val json = Json { ignoreUnknownKeys = true; isLenient = true }
+
+    private val prefs: SharedPreferences =
+        appContext.getSharedPreferences("insta_downloader", Context.MODE_PRIVATE)
 
     // Screen state
     enum class Screen { LOGIN, MAIN, GALLERY }
@@ -41,7 +44,6 @@ class AppViewModel {
     private val _loginError = MutableStateFlow<String?>(null)
     val loginError: StateFlow<String?> = _loginError.asStateFlow()
 
-    // Logged-in username (for own-account detection)
     private var loggedInUsername: String = ""
 
     // Profile state
@@ -64,6 +66,22 @@ class AppViewModel {
     private val _archivedPosts = MutableStateFlow<DownloadResult<List<FeedPost>>?>(null)
     val archivedPosts: StateFlow<DownloadResult<List<FeedPost>>?> = _archivedPosts.asStateFlow()
 
+    // Reels state
+    private val _reels = MutableStateFlow<DownloadResult<List<FeedPost>>?>(null)
+    val reels: StateFlow<DownloadResult<List<FeedPost>>?> = _reels.asStateFlow()
+
+    // Saved posts state (own account only)
+    private val _savedPosts = MutableStateFlow<DownloadResult<List<FeedPost>>?>(null)
+    val savedPosts: StateFlow<DownloadResult<List<FeedPost>>?> = _savedPosts.asStateFlow()
+
+    // Tagged posts state
+    private val _taggedPosts = MutableStateFlow<DownloadResult<List<FeedPost>>?>(null)
+    val taggedPosts: StateFlow<DownloadResult<List<FeedPost>>?> = _taggedPosts.asStateFlow()
+
+    // Shared post (from intent)
+    private val _sharedPost = MutableStateFlow<DownloadResult<FeedPost>?>(null)
+    val sharedPost: StateFlow<DownloadResult<FeedPost>?> = _sharedPost.asStateFlow()
+
     // Whether the currently viewed profile is the logged-in user's own profile
     private val _isOwnProfile = MutableStateFlow(false)
     val isOwnProfile: StateFlow<Boolean> = _isOwnProfile.asStateFlow()
@@ -79,13 +97,19 @@ class AppViewModel {
     private val _galleryItems = MutableStateFlow<List<GalleryItem>>(emptyList())
     val galleryItems: StateFlow<List<GalleryItem>> = _galleryItems.asStateFlow()
 
+    // Search history
+    private val _searchHistory = MutableStateFlow<List<SearchHistoryEntry>>(emptyList())
+    val searchHistory: StateFlow<List<SearchHistoryEntry>> = _searchHistory.asStateFlow()
+
     // Download progress
     val downloadProgress: StateFlow<DownloadProgress> = downloadManager.downloadProgress
 
-    /**
-     * Attempts to log in with the given credentials.
-     * If 2FA is required, sets twoFactorInfo and isTwoFactorPending.
-     */
+    init {
+        loadSearchHistory()
+    }
+
+    // --- Login ---
+
     fun login(username: String, password: String) {
         scope.launch {
             _isLoginLoading.value = true
@@ -115,9 +139,6 @@ class AppViewModel {
         }
     }
 
-    /**
-     * Verifies the 2FA code to complete login.
-     */
     fun verifyTwoFactor(code: String) {
         val info = _twoFactorInfo.value ?: return
         scope.launch {
@@ -147,26 +168,19 @@ class AppViewModel {
         }
     }
 
-    /**
-     * Cancels the 2FA flow and returns to login.
-     */
     fun cancelTwoFactor() {
         _isTwoFactorPending.value = false
         _twoFactorInfo.value = null
         _loginError.value = null
     }
 
-    /**
-     * Enters anonymous mode (no login required, limited to public profiles).
-     */
     fun enterAnonymousMode() {
         _isAnonymousMode.value = true
         _currentScreen.value = Screen.MAIN
     }
 
-    /**
-     * Searches for a user profile.
-     */
+    // --- Profile Search ---
+
     fun searchUser(username: String) {
         scope.launch {
             _currentProfile.value = null
@@ -174,12 +188,19 @@ class AppViewModel {
             _highlights.value = DownloadResult.Loading
             _feedPosts.value = DownloadResult.Loading
             _archivedPosts.value = null
+            _reels.value = null
+            _savedPosts.value = null
+            _taggedPosts.value = null
             _isOwnProfile.value = false
+            _sharedPost.value = null
 
             when (val result = instagramService.fetchUserProfile(username)) {
                 is DownloadResult.Success -> {
                     _currentProfile.value = result.data
                     val userId = result.data.userId
+
+                    // Add to search history
+                    addToSearchHistory(result.data)
 
                     // Check if this is the logged-in user's own profile
                     val isOwn = !_isAnonymousMode.value &&
@@ -188,25 +209,33 @@ class AppViewModel {
                             userId == instagramService.getSessionUserId())
                     _isOwnProfile.value = isOwn
 
-                    // Always fetch feed posts (works anonymously for public profiles)
+                    // Fetch feed posts
                     launch {
                         _feedPosts.value = instagramService.fetchFeedPosts(username)
                     }
 
                     if (userId.isNotEmpty() && !_isAnonymousMode.value) {
-                        // Fetch stories and highlights in parallel (requires login)
+                        // Fetch stories, highlights, reels, tagged in parallel
+                        launch { _stories.value = instagramService.fetchStories(userId) }
+                        launch { _highlights.value = instagramService.fetchHighlights(userId) }
                         launch {
-                            _stories.value = instagramService.fetchStories(userId)
+                            _reels.value = DownloadResult.Loading
+                            _reels.value = instagramService.fetchReels(userId)
                         }
                         launch {
-                            _highlights.value = instagramService.fetchHighlights(userId)
+                            _taggedPosts.value = DownloadResult.Loading
+                            _taggedPosts.value = instagramService.fetchTaggedPosts(userId)
                         }
 
-                        // Fetch archived posts only for own profile
+                        // Own-profile-only data
                         if (isOwn) {
                             launch {
                                 _archivedPosts.value = DownloadResult.Loading
                                 _archivedPosts.value = instagramService.fetchArchivedPosts()
+                            }
+                            launch {
+                                _savedPosts.value = DownloadResult.Loading
+                                _savedPosts.value = instagramService.fetchSavedPosts()
                             }
                         }
                     }
@@ -222,98 +251,115 @@ class AppViewModel {
         }
     }
 
-    /**
-     * Downloads the profile picture of the current user.
-     */
+    // --- Downloads ---
+
     fun downloadProfilePicture() {
         val profile = _currentProfile.value ?: return
-        scope.launch {
-            downloadManager.downloadProfilePicture(profile)
-        }
+        scope.launch { downloadManager.downloadProfilePicture(profile) }
     }
 
-    /**
-     * Downloads all stories of the current user.
-     */
     fun downloadStories() {
         val profile = _currentProfile.value ?: return
         val storiesResult = _stories.value
         if (storiesResult !is DownloadResult.Success) return
-
-        scope.launch {
-            downloadManager.downloadStories(profile, storiesResult.data)
-        }
+        scope.launch { downloadManager.downloadStories(profile, storiesResult.data) }
     }
 
-    /**
-     * Downloads a specific highlight reel.
-     */
     fun downloadHighlight(highlight: HighlightReel) {
         val profile = _currentProfile.value ?: return
-        scope.launch {
-            downloadManager.downloadHighlight(profile, highlight)
-        }
+        scope.launch { downloadManager.downloadHighlight(profile, highlight) }
     }
 
-    /**
-     * Downloads all feed posts of the current user.
-     */
-    fun downloadFeedPosts() {
-        val profile = _currentProfile.value ?: return
-        val postsResult = _feedPosts.value
-        if (postsResult !is DownloadResult.Success) return
-
-        scope.launch {
-            downloadManager.downloadFeedPosts(profile, postsResult.data)
-        }
-    }
-
-    /**
-     * Downloads all archived posts (own account only).
-     */
-    fun downloadArchivedPosts() {
-        val profile = _currentProfile.value ?: return
-        val archiveResult = _archivedPosts.value
-        if (archiveResult !is DownloadResult.Success) return
-
-        scope.launch {
-            downloadManager.downloadArchivedPosts(profile.username, archiveResult.data)
-        }
-    }
-
-    /**
-     * Downloads all highlights.
-     */
     fun downloadAllHighlights() {
         val profile = _currentProfile.value ?: return
         val highlightsResult = _highlights.value
         if (highlightsResult !is DownloadResult.Success) return
+        scope.launch { downloadManager.downloadAllHighlights(profile, highlightsResult.data) }
+    }
 
+    fun downloadFeedPosts() {
+        val profile = _currentProfile.value ?: return
+        val postsResult = _feedPosts.value
+        if (postsResult !is DownloadResult.Success) return
+        scope.launch { downloadManager.downloadFeedPosts(profile, postsResult.data) }
+    }
+
+    fun downloadArchivedPosts() {
+        val profile = _currentProfile.value ?: return
+        val archiveResult = _archivedPosts.value
+        if (archiveResult !is DownloadResult.Success) return
+        scope.launch { downloadManager.downloadArchivedPosts(profile.username, archiveResult.data) }
+    }
+
+    fun downloadReels() {
+        val profile = _currentProfile.value ?: return
+        val reelsResult = _reels.value
+        if (reelsResult !is DownloadResult.Success) return
+        scope.launch { downloadManager.downloadReels(profile, reelsResult.data) }
+    }
+
+    fun downloadSavedPosts() {
+        val savedResult = _savedPosts.value
+        if (savedResult !is DownloadResult.Success) return
+        scope.launch { downloadManager.downloadSavedPosts(savedResult.data) }
+    }
+
+    fun downloadTaggedPosts() {
+        val profile = _currentProfile.value ?: return
+        val taggedResult = _taggedPosts.value
+        if (taggedResult !is DownloadResult.Success) return
+        scope.launch { downloadManager.downloadTaggedPosts(profile, taggedResult.data) }
+    }
+
+    fun downloadSharedPost() {
+        val postResult = _sharedPost.value
+        if (postResult !is DownloadResult.Success) return
+        scope.launch { downloadManager.downloadSharedPost(postResult.data) }
+    }
+
+    fun dismissSharedPost() {
+        _sharedPost.value = null
+    }
+
+    // --- Share Intent ---
+
+    fun handleShareIntent(text: String) {
         scope.launch {
-            downloadManager.downloadAllHighlights(profile, highlightsResult.data)
+            // Try to extract shortcode from URL
+            val shortcode = instagramService.extractShortcodeFromUrl(text)
+            if (shortcode != null) {
+                _sharedPost.value = DownloadResult.Loading
+                _sharedPost.value = instagramService.fetchPostByShortcode(shortcode)
+
+                // Switch to main screen if not already there
+                if (_currentScreen.value == Screen.LOGIN && instagramService.isAuthenticated()) {
+                    _currentScreen.value = Screen.MAIN
+                }
+                return@launch
+            }
+
+            // Try to extract username
+            val username = instagramService.extractUsernameFromUrl(text)
+            if (username != null) {
+                if (_currentScreen.value == Screen.LOGIN && instagramService.isAuthenticated()) {
+                    _currentScreen.value = Screen.MAIN
+                }
+                searchUser(username)
+            }
         }
     }
 
-    // --- Gallery functions ---
+    // --- Gallery ---
 
-    /**
-     * Opens the in-app gallery.
-     */
     fun openGallery() {
         loadGalleryItems()
         _currentScreen.value = Screen.GALLERY
     }
 
-    /**
-     * Returns from gallery to main screen.
-     */
     fun closeGallery() {
         _currentScreen.value = Screen.MAIN
     }
 
-    /**
-     * Scans the download directory and loads all media files into the gallery.
-     */
     fun loadGalleryItems() {
         scope.launch(Dispatchers.IO) {
             val dir = File(downloadManager.getDownloadDir())
@@ -352,10 +398,6 @@ class AppViewModel {
         }
     }
 
-    /**
-     * Saves a gallery item to the system gallery (DCIM/InstaDownloader).
-     * This makes it visible in the phone's normal gallery app.
-     */
     fun saveToSystemGallery(context: Context, item: GalleryItem) {
         scope.launch(Dispatchers.IO) {
             try {
@@ -383,7 +425,6 @@ class AppViewModel {
                         }
                     }
 
-                    // Notify MediaScanner
                     MediaScannerConnection.scanFile(
                         context,
                         arrayOf(uri.path ?: ""),
@@ -392,7 +433,6 @@ class AppViewModel {
                     )
                 }
             } catch (_: Exception) {
-                // Fallback: copy directly
                 try {
                     val dcimDir = File(
                         Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DCIM),
@@ -413,9 +453,6 @@ class AppViewModel {
         }
     }
 
-    /**
-     * Deletes a gallery item from the download directory.
-     */
     fun deleteGalleryItem(item: GalleryItem) {
         scope.launch(Dispatchers.IO) {
             if (item.file.exists()) {
@@ -425,9 +462,97 @@ class AppViewModel {
         }
     }
 
-    /**
-     * Logs out and returns to the login screen.
-     */
+    // --- Search History ---
+
+    private fun loadSearchHistory() {
+        val historyJson = prefs.getString("search_history", "[]") ?: "[]"
+        try {
+            val jsonArray = json.decodeFromString<JsonArray>(historyJson)
+            val entries = jsonArray.mapNotNull { element ->
+                val obj = element.jsonObject
+                SearchHistoryEntry(
+                    username = obj["username"]?.jsonPrimitive?.content ?: return@mapNotNull null,
+                    fullName = obj["fullName"]?.jsonPrimitive?.content ?: "",
+                    profilePicUrl = obj["profilePicUrl"]?.jsonPrimitive?.content ?: "",
+                    isFavorite = obj["isFavorite"]?.jsonPrimitive?.content?.toBooleanStrictOrNull() ?: false,
+                    lastSearched = obj["lastSearched"]?.jsonPrimitive?.longOrNull ?: 0
+                )
+            }
+            _searchHistory.value = entries.sortedWith(
+                compareByDescending<SearchHistoryEntry> { it.isFavorite }
+                    .thenByDescending { it.lastSearched }
+            )
+        } catch (_: Exception) {
+            _searchHistory.value = emptyList()
+        }
+    }
+
+    private fun saveSearchHistory() {
+        val jsonArray = buildJsonArray {
+            _searchHistory.value.forEach { entry ->
+                add(buildJsonObject {
+                    put("username", entry.username)
+                    put("fullName", entry.fullName)
+                    put("profilePicUrl", entry.profilePicUrl)
+                    put("isFavorite", entry.isFavorite)
+                    put("lastSearched", entry.lastSearched)
+                })
+            }
+        }
+        prefs.edit().putString("search_history", jsonArray.toString()).apply()
+    }
+
+    private fun addToSearchHistory(profile: UserProfile) {
+        val existing = _searchHistory.value.toMutableList()
+        val existingIndex = existing.indexOfFirst { it.username.equals(profile.username, ignoreCase = true) }
+
+        val entry = SearchHistoryEntry(
+            username = profile.username,
+            fullName = profile.fullName,
+            profilePicUrl = profile.profilePicUrl,
+            isFavorite = if (existingIndex >= 0) existing[existingIndex].isFavorite else false,
+            lastSearched = System.currentTimeMillis()
+        )
+
+        if (existingIndex >= 0) {
+            existing[existingIndex] = entry
+        } else {
+            existing.add(0, entry)
+        }
+
+        // Keep max 50 entries
+        if (existing.size > 50) {
+            val nonFavorites = existing.filter { !it.isFavorite }.sortedByDescending { it.lastSearched }
+            val favorites = existing.filter { it.isFavorite }
+            _searchHistory.value = (favorites + nonFavorites).take(50)
+        } else {
+            _searchHistory.value = existing.sortedWith(
+                compareByDescending<SearchHistoryEntry> { it.isFavorite }
+                    .thenByDescending { it.lastSearched }
+            )
+        }
+
+        saveSearchHistory()
+    }
+
+    fun toggleFavorite(entry: SearchHistoryEntry) {
+        val updated = _searchHistory.value.map {
+            if (it.username == entry.username) it.copy(isFavorite = !it.isFavorite) else it
+        }.sortedWith(
+            compareByDescending<SearchHistoryEntry> { it.isFavorite }
+                .thenByDescending { it.lastSearched }
+        )
+        _searchHistory.value = updated
+        saveSearchHistory()
+    }
+
+    fun removeFromHistory(entry: SearchHistoryEntry) {
+        _searchHistory.value = _searchHistory.value.filter { it.username != entry.username }
+        saveSearchHistory()
+    }
+
+    // --- Logout ---
+
     fun logout() {
         scope.launch {
             if (!_isAnonymousMode.value) {
@@ -439,6 +564,10 @@ class AppViewModel {
             _highlights.value = DownloadResult.Loading
             _feedPosts.value = DownloadResult.Loading
             _archivedPosts.value = null
+            _reels.value = null
+            _savedPosts.value = null
+            _taggedPosts.value = null
+            _sharedPost.value = null
             _isOwnProfile.value = false
             _loginError.value = null
             _isAnonymousMode.value = false
@@ -448,9 +577,6 @@ class AppViewModel {
         }
     }
 
-    /**
-     * Returns the download directory path.
-     */
     fun getDownloadDir(): String = downloadManager.getDownloadDir()
 
     fun dispose() {

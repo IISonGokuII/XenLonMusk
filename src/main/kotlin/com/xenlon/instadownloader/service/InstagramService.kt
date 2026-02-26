@@ -729,6 +729,508 @@ class InstagramService {
     }
 
     /**
+     * Fetches reels (short videos) for a user using the clips endpoint.
+     */
+    suspend fun fetchReels(userId: String): DownloadResult<List<FeedPost>> = withContext(Dispatchers.IO) {
+        if (!isLoggedIn) {
+            return@withContext DownloadResult.Error("Login erforderlich, um Reels zu laden")
+        }
+
+        try {
+            val allPosts = mutableListOf<FeedPost>()
+            var maxId: String? = null
+            var hasMore = true
+
+            while (hasMore) {
+                val response = client.post("$BASE_URL/api/v1/clips/user/") {
+                    addAuthHeaders()
+                    headers {
+                        append(HttpHeaders.ContentType, "application/x-www-form-urlencoded")
+                    }
+                    setBody(FormDataContent(Parameters.build {
+                        append("target_user_id", userId)
+                        append("page_size", "18")
+                        if (maxId != null) append("max_id", maxId!!)
+                        append("include_feed_video", "true")
+                    }))
+                }
+
+                if (response.status != HttpStatusCode.OK) {
+                    if (allPosts.isEmpty()) {
+                        return@withContext DownloadResult.Error(
+                            "Reels konnten nicht geladen werden (HTTP ${response.status.value})",
+                            response.status.value
+                        )
+                    }
+                    break
+                }
+
+                val body = response.bodyAsText()
+                val jsonResponse = json.decodeFromString<JsonObject>(body)
+
+                val items = jsonResponse["items"]?.jsonArray
+                if (items.isNullOrEmpty()) break
+
+                items.forEach { itemJson ->
+                    val media = itemJson.jsonObject["media"]?.jsonObject ?: itemJson.jsonObject
+                    val mediaType = media["media_type"]?.jsonPrimitive?.content?.toIntOrNull() ?: 2
+
+                    val videoUrl = media["video_versions"]?.jsonArray
+                        ?.firstOrNull()?.jsonObject
+                        ?.get("url")?.jsonPrimitive?.content ?: ""
+
+                    val thumbnailUrl = media["image_versions2"]?.jsonObject
+                        ?.get("candidates")?.jsonArray
+                        ?.firstOrNull()?.jsonObject
+                        ?.get("url")?.jsonPrimitive?.content ?: ""
+
+                    val captionObj = media["caption"]?.jsonObject
+                    val caption = captionObj?.get("text")?.jsonPrimitive?.content ?: ""
+                    val code = media["code"]?.jsonPrimitive?.content ?: ""
+
+                    if (videoUrl.isNotEmpty()) {
+                        allPosts.add(
+                            FeedPost(
+                                id = media["id"]?.jsonPrimitive?.content ?: media["pk"]?.jsonPrimitive?.content ?: "",
+                                shortcode = code,
+                                mediaUrls = listOf(videoUrl),
+                                thumbnailUrl = thumbnailUrl,
+                                type = MediaType.VIDEO,
+                                isCarousel = false,
+                                caption = caption,
+                                timestamp = media["taken_at"]?.jsonPrimitive?.longOrNull ?: 0,
+                                likeCount = media["like_count"]?.jsonPrimitive?.longOrNull ?: 0,
+                                commentCount = media["comment_count"]?.jsonPrimitive?.longOrNull ?: 0
+                            )
+                        )
+                    }
+                }
+
+                hasMore = jsonResponse["paging_info"]?.jsonObject
+                    ?.get("more_available")?.jsonPrimitive?.content?.toBooleanStrictOrNull() ?: false
+                maxId = jsonResponse["paging_info"]?.jsonObject
+                    ?.get("max_id")?.jsonPrimitive?.content
+
+                if (allPosts.size >= 200) break
+            }
+
+            DownloadResult.Success(allPosts)
+        } catch (e: Exception) {
+            DownloadResult.Error("Fehler beim Laden der Reels: ${e.message}")
+        }
+    }
+
+    /**
+     * Fetches saved/bookmarked posts for the logged-in user.
+     */
+    suspend fun fetchSavedPosts(): DownloadResult<List<FeedPost>> = withContext(Dispatchers.IO) {
+        if (!isLoggedIn) {
+            return@withContext DownloadResult.Error("Login erforderlich, um gespeicherte Posts zu laden")
+        }
+
+        try {
+            val allPosts = mutableListOf<FeedPost>()
+            var maxId: String? = null
+            var hasMore = true
+
+            while (hasMore) {
+                val response = client.get("$BASE_URL/api/v1/feed/saved/posts/") {
+                    if (maxId != null) parameter("max_id", maxId)
+                    addAuthHeaders()
+                }
+
+                if (response.status != HttpStatusCode.OK) {
+                    if (allPosts.isEmpty()) {
+                        return@withContext DownloadResult.Error(
+                            "Gespeicherte Posts konnten nicht geladen werden (HTTP ${response.status.value})",
+                            response.status.value
+                        )
+                    }
+                    break
+                }
+
+                val body = response.bodyAsText()
+                val jsonResponse = json.decodeFromString<JsonObject>(body)
+
+                val items = jsonResponse["items"]?.jsonArray
+                if (items.isNullOrEmpty()) break
+
+                items.forEach { itemJson ->
+                    val media = itemJson.jsonObject["media"]?.jsonObject ?: itemJson.jsonObject
+                    val mediaType = media["media_type"]?.jsonPrimitive?.content?.toIntOrNull() ?: 1
+                    val isVideo = mediaType == 2
+                    val isCarousel = mediaType == 8
+
+                    val mediaUrls = mutableListOf<String>()
+
+                    if (isCarousel) {
+                        val carouselMedia = media["carousel_media"]?.jsonArray
+                        carouselMedia?.forEach { carouselItem ->
+                            val ci = carouselItem.jsonObject
+                            val ciType = ci["media_type"]?.jsonPrimitive?.content?.toIntOrNull() ?: 1
+                            val ciIsVideo = ciType == 2
+                            val url = if (ciIsVideo) {
+                                ci["video_versions"]?.jsonArray
+                                    ?.firstOrNull()?.jsonObject
+                                    ?.get("url")?.jsonPrimitive?.content ?: ""
+                            } else {
+                                ci["image_versions2"]?.jsonObject
+                                    ?.get("candidates")?.jsonArray
+                                    ?.firstOrNull()?.jsonObject
+                                    ?.get("url")?.jsonPrimitive?.content ?: ""
+                            }
+                            if (url.isNotEmpty()) mediaUrls.add(url)
+                        }
+                    } else {
+                        val url = if (isVideo) {
+                            media["video_versions"]?.jsonArray
+                                ?.firstOrNull()?.jsonObject
+                                ?.get("url")?.jsonPrimitive?.content ?: ""
+                        } else {
+                            media["image_versions2"]?.jsonObject
+                                ?.get("candidates")?.jsonArray
+                                ?.firstOrNull()?.jsonObject
+                                ?.get("url")?.jsonPrimitive?.content ?: ""
+                        }
+                        if (url.isNotEmpty()) mediaUrls.add(url)
+                    }
+
+                    val thumbnailUrl = media["image_versions2"]?.jsonObject
+                        ?.get("candidates")?.jsonArray
+                        ?.firstOrNull()?.jsonObject
+                        ?.get("url")?.jsonPrimitive?.content ?: ""
+
+                    val captionObj = media["caption"]?.jsonObject
+                    val caption = captionObj?.get("text")?.jsonPrimitive?.content ?: ""
+                    val code = media["code"]?.jsonPrimitive?.content ?: ""
+
+                    allPosts.add(
+                        FeedPost(
+                            id = media["id"]?.jsonPrimitive?.content ?: media["pk"]?.jsonPrimitive?.content ?: "",
+                            shortcode = code,
+                            mediaUrls = mediaUrls,
+                            thumbnailUrl = thumbnailUrl,
+                            type = when {
+                                isVideo -> MediaType.VIDEO
+                                else -> MediaType.IMAGE
+                            },
+                            isCarousel = isCarousel,
+                            caption = caption,
+                            timestamp = media["taken_at"]?.jsonPrimitive?.longOrNull ?: 0,
+                            likeCount = media["like_count"]?.jsonPrimitive?.longOrNull ?: 0,
+                            commentCount = media["comment_count"]?.jsonPrimitive?.longOrNull ?: 0
+                        )
+                    )
+                }
+
+                hasMore = jsonResponse["more_available"]?.jsonPrimitive?.content?.toBooleanStrictOrNull() ?: false
+                maxId = jsonResponse["next_max_id"]?.jsonPrimitive?.content
+
+                if (allPosts.size >= 500) break
+            }
+
+            DownloadResult.Success(allPosts)
+        } catch (e: Exception) {
+            DownloadResult.Error("Fehler beim Laden der gespeicherten Posts: ${e.message}")
+        }
+    }
+
+    /**
+     * Fetches posts where the user is tagged.
+     */
+    suspend fun fetchTaggedPosts(userId: String): DownloadResult<List<FeedPost>> = withContext(Dispatchers.IO) {
+        if (!isLoggedIn) {
+            return@withContext DownloadResult.Error("Login erforderlich, um markierte Posts zu laden")
+        }
+
+        try {
+            val allPosts = mutableListOf<FeedPost>()
+            var maxId: String? = null
+            var hasMore = true
+
+            while (hasMore) {
+                val response = client.get("$BASE_URL/api/v1/usertags/$userId/feed/") {
+                    if (maxId != null) parameter("max_id", maxId)
+                    addAuthHeaders()
+                }
+
+                if (response.status != HttpStatusCode.OK) {
+                    if (allPosts.isEmpty()) {
+                        return@withContext DownloadResult.Error(
+                            "Markierte Posts konnten nicht geladen werden (HTTP ${response.status.value})",
+                            response.status.value
+                        )
+                    }
+                    break
+                }
+
+                val body = response.bodyAsText()
+                val jsonResponse = json.decodeFromString<JsonObject>(body)
+
+                val items = jsonResponse["items"]?.jsonArray
+                if (items.isNullOrEmpty()) break
+
+                items.forEach { itemJson ->
+                    val item = itemJson.jsonObject
+                    val mediaType = item["media_type"]?.jsonPrimitive?.content?.toIntOrNull() ?: 1
+                    val isVideo = mediaType == 2
+                    val isCarousel = mediaType == 8
+
+                    val mediaUrls = mutableListOf<String>()
+
+                    if (isCarousel) {
+                        val carouselMedia = item["carousel_media"]?.jsonArray
+                        carouselMedia?.forEach { carouselItem ->
+                            val ci = carouselItem.jsonObject
+                            val ciType = ci["media_type"]?.jsonPrimitive?.content?.toIntOrNull() ?: 1
+                            val ciIsVideo = ciType == 2
+                            val url = if (ciIsVideo) {
+                                ci["video_versions"]?.jsonArray
+                                    ?.firstOrNull()?.jsonObject
+                                    ?.get("url")?.jsonPrimitive?.content ?: ""
+                            } else {
+                                ci["image_versions2"]?.jsonObject
+                                    ?.get("candidates")?.jsonArray
+                                    ?.firstOrNull()?.jsonObject
+                                    ?.get("url")?.jsonPrimitive?.content ?: ""
+                            }
+                            if (url.isNotEmpty()) mediaUrls.add(url)
+                        }
+                    } else {
+                        val url = if (isVideo) {
+                            item["video_versions"]?.jsonArray
+                                ?.firstOrNull()?.jsonObject
+                                ?.get("url")?.jsonPrimitive?.content ?: ""
+                        } else {
+                            item["image_versions2"]?.jsonObject
+                                ?.get("candidates")?.jsonArray
+                                ?.firstOrNull()?.jsonObject
+                                ?.get("url")?.jsonPrimitive?.content ?: ""
+                        }
+                        if (url.isNotEmpty()) mediaUrls.add(url)
+                    }
+
+                    val thumbnailUrl = item["image_versions2"]?.jsonObject
+                        ?.get("candidates")?.jsonArray
+                        ?.firstOrNull()?.jsonObject
+                        ?.get("url")?.jsonPrimitive?.content ?: ""
+
+                    val captionObj = item["caption"]?.jsonObject
+                    val caption = captionObj?.get("text")?.jsonPrimitive?.content ?: ""
+                    val code = item["code"]?.jsonPrimitive?.content ?: ""
+
+                    allPosts.add(
+                        FeedPost(
+                            id = item["id"]?.jsonPrimitive?.content ?: item["pk"]?.jsonPrimitive?.content ?: "",
+                            shortcode = code,
+                            mediaUrls = mediaUrls,
+                            thumbnailUrl = thumbnailUrl,
+                            type = when {
+                                isVideo -> MediaType.VIDEO
+                                else -> MediaType.IMAGE
+                            },
+                            isCarousel = isCarousel,
+                            caption = caption,
+                            timestamp = item["taken_at"]?.jsonPrimitive?.longOrNull ?: 0,
+                            likeCount = item["like_count"]?.jsonPrimitive?.longOrNull ?: 0,
+                            commentCount = item["comment_count"]?.jsonPrimitive?.longOrNull ?: 0
+                        )
+                    )
+                }
+
+                hasMore = jsonResponse["more_available"]?.jsonPrimitive?.content?.toBooleanStrictOrNull() ?: false
+                maxId = jsonResponse["next_max_id"]?.jsonPrimitive?.content
+
+                if (allPosts.size >= 500) break
+            }
+
+            DownloadResult.Success(allPosts)
+        } catch (e: Exception) {
+            DownloadResult.Error("Fehler beim Laden der markierten Posts: ${e.message}")
+        }
+    }
+
+    /**
+     * Extracts a post shortcode from an Instagram URL.
+     * Supports: /p/SHORTCODE/, /reel/SHORTCODE/, /tv/SHORTCODE/
+     */
+    fun extractShortcodeFromUrl(url: String): String? {
+        val regex = Regex("""instagram\.com/(?:p|reel|tv)/([A-Za-z0-9_-]+)""")
+        return regex.find(url)?.groupValues?.get(1)
+    }
+
+    /**
+     * Extracts a username from an Instagram profile URL.
+     */
+    fun extractUsernameFromUrl(url: String): String? {
+        val regex = Regex("""instagram\.com/([A-Za-z0-9._]+)/?(?:\?|$)""")
+        val match = regex.find(url) ?: return null
+        val name = match.groupValues[1]
+        if (name in listOf("p", "reel", "tv", "stories", "explore", "accounts")) return null
+        return name
+    }
+
+    /**
+     * Fetches a single post by its shortcode (for shared links).
+     */
+    suspend fun fetchPostByShortcode(shortcode: String): DownloadResult<FeedPost> = withContext(Dispatchers.IO) {
+        try {
+            val response = client.get("$BASE_URL/api/v1/media/${shortcode}/info/") {
+                if (isLoggedIn) addAuthHeaders("$BASE_URL/p/$shortcode/")
+                else addAnonHeaders("$BASE_URL/p/$shortcode/")
+            }
+
+            if (response.status != HttpStatusCode.OK) {
+                // Fallback: try GraphQL endpoint
+                return@withContext fetchPostByShortcodeGraphQL(shortcode)
+            }
+
+            val body = response.bodyAsText()
+            val jsonResponse = json.decodeFromString<JsonObject>(body)
+
+            val items = jsonResponse["items"]?.jsonArray
+            val item = items?.firstOrNull()?.jsonObject
+                ?: return@withContext DownloadResult.Error("Post nicht gefunden")
+
+            val mediaType = item["media_type"]?.jsonPrimitive?.content?.toIntOrNull() ?: 1
+            val isVideo = mediaType == 2
+            val isCarousel = mediaType == 8
+
+            val mediaUrls = mutableListOf<String>()
+
+            if (isCarousel) {
+                val carouselMedia = item["carousel_media"]?.jsonArray
+                carouselMedia?.forEach { carouselItem ->
+                    val ci = carouselItem.jsonObject
+                    val ciType = ci["media_type"]?.jsonPrimitive?.content?.toIntOrNull() ?: 1
+                    val ciIsVideo = ciType == 2
+                    val url = if (ciIsVideo) {
+                        ci["video_versions"]?.jsonArray
+                            ?.firstOrNull()?.jsonObject
+                            ?.get("url")?.jsonPrimitive?.content ?: ""
+                    } else {
+                        ci["image_versions2"]?.jsonObject
+                            ?.get("candidates")?.jsonArray
+                            ?.firstOrNull()?.jsonObject
+                            ?.get("url")?.jsonPrimitive?.content ?: ""
+                    }
+                    if (url.isNotEmpty()) mediaUrls.add(url)
+                }
+            } else {
+                val url = if (isVideo) {
+                    item["video_versions"]?.jsonArray
+                        ?.firstOrNull()?.jsonObject
+                        ?.get("url")?.jsonPrimitive?.content ?: ""
+                } else {
+                    item["image_versions2"]?.jsonObject
+                        ?.get("candidates")?.jsonArray
+                        ?.firstOrNull()?.jsonObject
+                        ?.get("url")?.jsonPrimitive?.content ?: ""
+                }
+                if (url.isNotEmpty()) mediaUrls.add(url)
+            }
+
+            val thumbnailUrl = item["image_versions2"]?.jsonObject
+                ?.get("candidates")?.jsonArray
+                ?.firstOrNull()?.jsonObject
+                ?.get("url")?.jsonPrimitive?.content ?: ""
+
+            val captionObj = item["caption"]?.jsonObject
+            val caption = captionObj?.get("text")?.jsonPrimitive?.content ?: ""
+
+            DownloadResult.Success(
+                FeedPost(
+                    id = item["id"]?.jsonPrimitive?.content ?: item["pk"]?.jsonPrimitive?.content ?: "",
+                    shortcode = shortcode,
+                    mediaUrls = mediaUrls,
+                    thumbnailUrl = thumbnailUrl,
+                    type = when {
+                        isVideo -> MediaType.VIDEO
+                        isCarousel -> MediaType.IMAGE
+                        else -> MediaType.IMAGE
+                    },
+                    isCarousel = isCarousel,
+                    caption = caption,
+                    timestamp = item["taken_at"]?.jsonPrimitive?.longOrNull ?: 0,
+                    likeCount = item["like_count"]?.jsonPrimitive?.longOrNull ?: 0,
+                    commentCount = item["comment_count"]?.jsonPrimitive?.longOrNull ?: 0
+                )
+            )
+        } catch (e: Exception) {
+            DownloadResult.Error("Fehler beim Laden des Posts: ${e.message}")
+        }
+    }
+
+    private suspend fun fetchPostByShortcodeGraphQL(shortcode: String): DownloadResult<FeedPost> = withContext(Dispatchers.IO) {
+        try {
+            val response = client.get("$BASE_URL/p/$shortcode/?__a=1&__d=dis") {
+                if (isLoggedIn) addAuthHeaders("$BASE_URL/p/$shortcode/")
+                else addAnonHeaders("$BASE_URL/p/$shortcode/")
+            }
+
+            if (response.status != HttpStatusCode.OK) {
+                return@withContext DownloadResult.Error("Post nicht gefunden (HTTP ${response.status.value})")
+            }
+
+            val body = response.bodyAsText()
+            val jsonResponse = json.decodeFromString<JsonObject>(body)
+
+            val node = jsonResponse["graphql"]?.jsonObject?.get("shortcode_media")?.jsonObject
+                ?: jsonResponse["data"]?.jsonObject?.get("shortcode_media")?.jsonObject
+                ?: return@withContext DownloadResult.Error("Post-Daten nicht gefunden")
+
+            val isVideo = node["is_video"]?.jsonPrimitive?.content?.toBooleanStrictOrNull() ?: false
+            val isCarousel = node["__typename"]?.jsonPrimitive?.content == "GraphSidecar"
+
+            val mediaUrls = mutableListOf<String>()
+
+            if (isCarousel) {
+                val edges = node["edge_sidecar_to_children"]?.jsonObject?.get("edges")?.jsonArray
+                edges?.forEach { edge ->
+                    val childNode = edge.jsonObject["node"]?.jsonObject
+                    val childIsVideo = childNode?.get("is_video")?.jsonPrimitive?.content?.toBooleanStrictOrNull() ?: false
+                    val url = if (childIsVideo) {
+                        childNode?.get("video_url")?.jsonPrimitive?.content ?: ""
+                    } else {
+                        childNode?.get("display_url")?.jsonPrimitive?.content ?: ""
+                    }
+                    if (url.isNotEmpty()) mediaUrls.add(url)
+                }
+            } else {
+                val url = if (isVideo) {
+                    node["video_url"]?.jsonPrimitive?.content ?: ""
+                } else {
+                    node["display_url"]?.jsonPrimitive?.content ?: ""
+                }
+                if (url.isNotEmpty()) mediaUrls.add(url)
+            }
+
+            val caption = node["edge_media_to_caption"]?.jsonObject
+                ?.get("edges")?.jsonArray
+                ?.firstOrNull()?.jsonObject
+                ?.get("node")?.jsonObject
+                ?.get("text")?.jsonPrimitive?.content ?: ""
+
+            DownloadResult.Success(
+                FeedPost(
+                    id = node["id"]?.jsonPrimitive?.content ?: "",
+                    shortcode = shortcode,
+                    mediaUrls = mediaUrls,
+                    thumbnailUrl = node["display_url"]?.jsonPrimitive?.content ?: "",
+                    type = if (isVideo) MediaType.VIDEO else MediaType.IMAGE,
+                    isCarousel = isCarousel,
+                    caption = caption,
+                    timestamp = node["taken_at_timestamp"]?.jsonPrimitive?.longOrNull ?: 0,
+                    likeCount = node["edge_media_preview_like"]?.jsonObject?.get("count")?.jsonPrimitive?.longOrNull ?: 0,
+                    commentCount = node["edge_media_preview_comment"]?.jsonObject?.get("count")?.jsonPrimitive?.longOrNull ?: 0
+                )
+            )
+        } catch (e: Exception) {
+            DownloadResult.Error("Fehler beim Laden des Posts: ${e.message}")
+        }
+    }
+
+    /**
      * Downloads a file from a URL and saves it to the specified path.
      */
     suspend fun downloadFile(url: String, outputPath: String): DownloadResult<String> = withContext(Dispatchers.IO) {
