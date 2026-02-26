@@ -56,6 +56,11 @@ class InstagramService {
     fun isAuthenticated(): Boolean = isLoggedIn
 
     /**
+     * Returns the logged-in user's ID (for own-account operations like archive).
+     */
+    fun getSessionUserId(): String = sessionUserId
+
+    /**
      * Performs login to Instagram with username and password.
      * Establishes a session via cookies for subsequent requests.
      */
@@ -514,6 +519,130 @@ class InstagramService {
             DownloadResult.Success(posts)
         } catch (e: Exception) {
             DownloadResult.Error("Fehler beim Laden der Posts: ${e.message}")
+        }
+    }
+
+    /**
+     * Fetches archived posts of the currently logged-in user.
+     * Archive is only accessible for your own account.
+     */
+    suspend fun fetchArchivedPosts(): DownloadResult<List<FeedPost>> = withContext(Dispatchers.IO) {
+        if (!isLoggedIn) {
+            return@withContext DownloadResult.Error("Login erforderlich, um auf das Archiv zuzugreifen")
+        }
+
+        try {
+            val allPosts = mutableListOf<FeedPost>()
+            var maxId: String? = null
+            var hasMore = true
+
+            // Paginate through archived posts
+            while (hasMore) {
+                val response = client.get("$BASE_URL/api/v1/feed/only_me_feed/") {
+                    if (maxId != null) {
+                        parameter("max_id", maxId)
+                    }
+                    addAuthHeaders()
+                }
+
+                if (response.status != HttpStatusCode.OK) {
+                    if (allPosts.isEmpty()) {
+                        return@withContext DownloadResult.Error(
+                            "Archiv konnte nicht geladen werden (HTTP ${response.status.value})",
+                            response.status.value
+                        )
+                    }
+                    break
+                }
+
+                val body = response.bodyAsText()
+                val jsonResponse = json.decodeFromString<JsonObject>(body)
+
+                val items = jsonResponse["items"]?.jsonArray
+                if (items.isNullOrEmpty()) break
+
+                items.forEach { itemJson ->
+                    val item = itemJson.jsonObject
+                    val mediaType = item["media_type"]?.jsonPrimitive?.content?.toIntOrNull() ?: 1
+                    val isVideo = mediaType == 2
+                    val isCarousel = mediaType == 8
+
+                    val mediaUrls = mutableListOf<String>()
+
+                    if (isCarousel) {
+                        val carouselMedia = item["carousel_media"]?.jsonArray
+                        carouselMedia?.forEach { carouselItem ->
+                            val ci = carouselItem.jsonObject
+                            val ciType = ci["media_type"]?.jsonPrimitive?.content?.toIntOrNull() ?: 1
+                            val ciIsVideo = ciType == 2
+
+                            val url = if (ciIsVideo) {
+                                ci["video_versions"]?.jsonArray
+                                    ?.firstOrNull()?.jsonObject
+                                    ?.get("url")?.jsonPrimitive?.content ?: ""
+                            } else {
+                                ci["image_versions2"]?.jsonObject
+                                    ?.get("candidates")?.jsonArray
+                                    ?.firstOrNull()?.jsonObject
+                                    ?.get("url")?.jsonPrimitive?.content ?: ""
+                            }
+                            if (url.isNotEmpty()) mediaUrls.add(url)
+                        }
+                    } else {
+                        val url = if (isVideo) {
+                            item["video_versions"]?.jsonArray
+                                ?.firstOrNull()?.jsonObject
+                                ?.get("url")?.jsonPrimitive?.content ?: ""
+                        } else {
+                            item["image_versions2"]?.jsonObject
+                                ?.get("candidates")?.jsonArray
+                                ?.firstOrNull()?.jsonObject
+                                ?.get("url")?.jsonPrimitive?.content ?: ""
+                        }
+                        if (url.isNotEmpty()) mediaUrls.add(url)
+                    }
+
+                    val thumbnailUrl = item["image_versions2"]?.jsonObject
+                        ?.get("candidates")?.jsonArray
+                        ?.firstOrNull()?.jsonObject
+                        ?.get("url")?.jsonPrimitive?.content ?: ""
+
+                    val captionObj = item["caption"]?.jsonObject
+                    val caption = captionObj?.get("text")?.jsonPrimitive?.content ?: ""
+
+                    val code = item["code"]?.jsonPrimitive?.content ?: ""
+
+                    allPosts.add(
+                        FeedPost(
+                            id = item["id"]?.jsonPrimitive?.content ?: item["pk"]?.jsonPrimitive?.content ?: "",
+                            shortcode = code,
+                            mediaUrls = mediaUrls,
+                            thumbnailUrl = thumbnailUrl,
+                            type = when {
+                                isVideo -> MediaType.VIDEO
+                                isCarousel -> MediaType.IMAGE
+                                else -> MediaType.IMAGE
+                            },
+                            isCarousel = isCarousel,
+                            caption = caption,
+                            timestamp = item["taken_at"]?.jsonPrimitive?.longOrNull ?: 0,
+                            likeCount = item["like_count"]?.jsonPrimitive?.longOrNull ?: 0,
+                            commentCount = item["comment_count"]?.jsonPrimitive?.longOrNull ?: 0
+                        )
+                    )
+                }
+
+                // Check for more pages
+                hasMore = jsonResponse["more_available"]?.jsonPrimitive?.content?.toBooleanStrictOrNull() ?: false
+                maxId = jsonResponse["next_max_id"]?.jsonPrimitive?.content
+
+                // Safety limit to avoid infinite loop
+                if (allPosts.size >= 500) break
+            }
+
+            DownloadResult.Success(allPosts)
+        } catch (e: Exception) {
+            DownloadResult.Error("Fehler beim Laden des Archivs: ${e.message}")
         }
     }
 

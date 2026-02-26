@@ -279,7 +279,7 @@ fun LoginScreen(
                                 modifier = Modifier.size(18.dp)
                             )
                             Text(
-                                text = "Anonym: Nur Profilbilder öffentlicher Profile.\nMit Login: Stories + Highlights + Profilbilder.",
+                                text = "Anonym: Profilbilder + gepostete Bilder (öffentlich).\nMit Login: + Stories + Highlights + eigenes Archiv.",
                                 color = TextSecondary,
                                 fontSize = 11.sp,
                                 lineHeight = 15.sp

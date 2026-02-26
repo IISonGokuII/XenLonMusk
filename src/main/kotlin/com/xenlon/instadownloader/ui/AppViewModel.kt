@@ -35,6 +35,9 @@ class AppViewModel {
     private val _loginError = MutableStateFlow<String?>(null)
     val loginError: StateFlow<String?> = _loginError.asStateFlow()
 
+    // Logged-in username (for own-account detection)
+    private var loggedInUsername: String = ""
+
     // Profile state
     private val _currentProfile = MutableStateFlow<UserProfile?>(null)
     val currentProfile: StateFlow<UserProfile?> = _currentProfile.asStateFlow()
@@ -51,6 +54,14 @@ class AppViewModel {
     private val _feedPosts = MutableStateFlow<DownloadResult<List<FeedPost>>>(DownloadResult.Loading)
     val feedPosts: StateFlow<DownloadResult<List<FeedPost>>> = _feedPosts.asStateFlow()
 
+    // Archived posts state (only available for own account)
+    private val _archivedPosts = MutableStateFlow<DownloadResult<List<FeedPost>>?>(null)
+    val archivedPosts: StateFlow<DownloadResult<List<FeedPost>>?> = _archivedPosts.asStateFlow()
+
+    // Whether the currently viewed profile is the logged-in user's own profile
+    private val _isOwnProfile = MutableStateFlow(false)
+    val isOwnProfile: StateFlow<Boolean> = _isOwnProfile.asStateFlow()
+
     // Download progress
     val downloadProgress: StateFlow<DownloadProgress> = downloadManager.downloadProgress
 
@@ -64,6 +75,7 @@ class AppViewModel {
 
             when (val result = instagramService.login(username, password)) {
                 is DownloadResult.Success -> {
+                    loggedInUsername = username
                     _currentScreen.value = Screen.MAIN
                     _loginError.value = null
                 }
@@ -94,11 +106,20 @@ class AppViewModel {
             _stories.value = DownloadResult.Loading
             _highlights.value = DownloadResult.Loading
             _feedPosts.value = DownloadResult.Loading
+            _archivedPosts.value = null
+            _isOwnProfile.value = false
 
             when (val result = instagramService.fetchUserProfile(username)) {
                 is DownloadResult.Success -> {
                     _currentProfile.value = result.data
                     val userId = result.data.userId
+
+                    // Check if this is the logged-in user's own profile
+                    val isOwn = !_isAnonymousMode.value &&
+                        instagramService.isAuthenticated() &&
+                        (username.equals(loggedInUsername, ignoreCase = true) ||
+                            userId == instagramService.getSessionUserId())
+                    _isOwnProfile.value = isOwn
 
                     // Always fetch feed posts (works anonymously for public profiles)
                     launch {
@@ -112,6 +133,14 @@ class AppViewModel {
                         }
                         launch {
                             _highlights.value = instagramService.fetchHighlights(userId)
+                        }
+
+                        // Fetch archived posts only for own profile
+                        if (isOwn) {
+                            launch {
+                                _archivedPosts.value = DownloadResult.Loading
+                                _archivedPosts.value = instagramService.fetchArchivedPosts()
+                            }
                         }
                     }
                 }
@@ -173,6 +202,19 @@ class AppViewModel {
     }
 
     /**
+     * Downloads all archived posts (own account only).
+     */
+    fun downloadArchivedPosts() {
+        val profile = _currentProfile.value ?: return
+        val archiveResult = _archivedPosts.value
+        if (archiveResult !is DownloadResult.Success) return
+
+        scope.launch {
+            downloadManager.downloadArchivedPosts(profile.username, archiveResult.data)
+        }
+    }
+
+    /**
      * Downloads all highlights.
      */
     fun downloadAllHighlights() {
@@ -198,8 +240,11 @@ class AppViewModel {
             _stories.value = DownloadResult.Loading
             _highlights.value = DownloadResult.Loading
             _feedPosts.value = DownloadResult.Loading
+            _archivedPosts.value = null
+            _isOwnProfile.value = false
             _loginError.value = null
             _isAnonymousMode.value = false
+            loggedInUsername = ""
         }
     }
 

@@ -239,6 +239,50 @@ class DownloadManager(
         return DownloadResult.Success(downloadedFiles)
     }
 
+    /**
+     * Downloads archived posts for the logged-in user.
+     */
+    suspend fun downloadArchivedPosts(
+        username: String,
+        posts: List<FeedPost>,
+        downloadDir: String = getDownloadDir()
+    ): DownloadResult<List<String>> {
+        if (posts.isEmpty()) {
+            _downloadProgress.value = DownloadProgress.Error("Keine archivierten Posts zum Download verfügbar")
+            return DownloadResult.Error("Keine archivierten Posts verfügbar")
+        }
+
+        val downloadedFiles = mutableListOf<String>()
+        val totalMedia = posts.sumOf { it.mediaUrls.size }
+        var currentItem = 0
+
+        posts.forEachIndexed { _, post ->
+            val timestamp = dateFormat.format(Date(post.timestamp * 1000))
+
+            post.mediaUrls.forEachIndexed { mediaIndex, url ->
+                currentItem++
+                _downloadProgress.value = DownloadProgress.Downloading(
+                    currentItem, totalMedia, "Archiv-Post $currentItem/$totalMedia"
+                )
+
+                val isVideo = url.contains(".mp4") || (post.type == MediaType.VIDEO && post.mediaUrls.size == 1)
+                val extension = if (isVideo) "mp4" else getExtension(url)
+                val carouselSuffix = if (post.isCarousel) "_${mediaIndex + 1}" else ""
+                val filename = "${username}_archive_${timestamp}_${post.shortcode}${carouselSuffix}.$extension"
+                val outputPath = File(downloadDir, "$username/archive/$filename").absolutePath
+
+                when (val result = instagramService.downloadFile(url, outputPath)) {
+                    is DownloadResult.Success -> downloadedFiles.add(result.data)
+                    is DownloadResult.Error -> { /* Skip failed items */ }
+                    else -> {}
+                }
+            }
+        }
+
+        _downloadProgress.value = DownloadProgress.Complete(downloadedFiles.size, "Archiv-Posts")
+        return DownloadResult.Success(downloadedFiles)
+    }
+
     fun resetProgress() {
         _downloadProgress.value = DownloadProgress.Idle
     }

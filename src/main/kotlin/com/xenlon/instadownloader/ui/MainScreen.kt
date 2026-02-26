@@ -32,14 +32,17 @@ fun MainScreen(
     stories: DownloadResult<List<StoryItem>>,
     highlights: DownloadResult<List<HighlightReel>>,
     feedPosts: DownloadResult<List<FeedPost>>,
+    archivedPosts: DownloadResult<List<FeedPost>>?,
     downloadProgress: DownloadProgress,
     isAnonymousMode: Boolean = false,
+    isOwnProfile: Boolean = false,
     onSearchUser: (String) -> Unit,
     onDownloadProfilePic: () -> Unit,
     onDownloadStories: () -> Unit,
     onDownloadHighlight: (HighlightReel) -> Unit,
     onDownloadAllHighlights: () -> Unit,
     onDownloadFeedPosts: () -> Unit,
+    onDownloadArchivedPosts: () -> Unit,
     onLogout: () -> Unit,
     onOpenDownloadFolder: () -> Unit
 ) {
@@ -191,6 +194,14 @@ fun MainScreen(
                     feedPosts = feedPosts,
                     onDownloadPosts = onDownloadFeedPosts
                 )
+
+                // Archived posts section (only for own profile when logged in)
+                if (isOwnProfile && archivedPosts != null) {
+                    ArchivedPostsSection(
+                        archivedPosts = archivedPosts,
+                        onDownloadArchive = onDownloadArchivedPosts
+                    )
+                }
             } else if (!isSearching) {
                 // Welcome card
                 WelcomeCard()
@@ -886,6 +897,95 @@ private fun FeedPostsSection(
                             )
                             Text(
                                 "Anonym - Der Benutzer sieht nicht, dass du seine Posts heruntergeladen hast.",
+                                color = TextSecondary,
+                                fontSize = 11.sp,
+                                lineHeight = 14.sp
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ArchivedPostsSection(
+    archivedPosts: DownloadResult<List<FeedPost>>,
+    onDownloadArchive: () -> Unit
+) {
+    SectionCard(
+        title = "Archiv",
+        icon = Icons.Default.Archive,
+        gradientColors = listOf(Color(0xFF6366F1), Color(0xFF8B5CF6))
+    ) {
+        when (archivedPosts) {
+            is DownloadResult.Loading -> {
+                Box(modifier = Modifier.fillMaxWidth().padding(20.dp), contentAlignment = Alignment.Center) {
+                    CircularProgressIndicator(color = Color(0xFF8B5CF6), modifier = Modifier.size(24.dp))
+                }
+            }
+            is DownloadResult.Error -> {
+                ErrorMessage(archivedPosts.message)
+            }
+            is DownloadResult.Success -> {
+                val posts = archivedPosts.data
+                if (posts.isEmpty()) {
+                    EmptyMessage("Keine archivierten Posts vorhanden")
+                } else {
+                    Column {
+                        val totalMedia = posts.sumOf { it.mediaUrls.size }
+                        val videoCount = posts.count { it.type == MediaType.VIDEO }
+                        val carouselCount = posts.count { it.isCarousel }
+                        val imageCount = posts.size - videoCount - carouselCount
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                "${posts.size} archivierte${if (posts.size != 1) " Posts" else "r Post"} gefunden",
+                                color = TextSecondary,
+                                fontSize = 14.sp
+                            )
+                            Text(
+                                "$totalMedia Dateien",
+                                color = TextSecondary,
+                                fontSize = 12.sp
+                            )
+                        }
+
+                        Spacer(modifier = Modifier.height(12.dp))
+
+                        Button(
+                            onClick = onDownloadArchive,
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(12.dp),
+                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF8B5CF6))
+                        ) {
+                            Icon(Icons.Default.Archive, contentDescription = null, modifier = Modifier.size(20.dp))
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                "Archiv herunterladen ($totalMedia Dateien)",
+                                fontWeight = FontWeight.SemiBold
+                            )
+                        }
+
+                        Spacer(modifier = Modifier.height(8.dp))
+
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            Icon(
+                                Icons.Default.PersonPin,
+                                contentDescription = null,
+                                tint = Color(0xFF8B5CF6),
+                                modifier = Modifier.size(14.dp)
+                            )
+                            Text(
+                                "Nur dein eigenes Archiv - andere Benutzer haben keinen Zugriff auf archivierte Posts.",
                                 color = TextSecondary,
                                 fontSize = 11.sp,
                                 lineHeight = 14.sp
