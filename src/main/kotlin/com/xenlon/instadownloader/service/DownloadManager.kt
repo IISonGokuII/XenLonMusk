@@ -32,11 +32,13 @@ class DownloadManager(
     private val dateFormat = SimpleDateFormat("yyyy-MM-dd_HH-mm-ss", Locale.getDefault())
 
     /**
-     * Gets the default download directory.
+     * Gets the default download directory (Downloads/InstaDownloader on Android).
      */
     fun getDownloadDir(): String {
-        val home = System.getProperty("user.home")
-        val dir = File(home, "InstaDownloader")
+        val downloadsDir = android.os.Environment.getExternalStoragePublicDirectory(
+            android.os.Environment.DIRECTORY_DOWNLOADS
+        )
+        val dir = File(downloadsDir, "InstaDownloader")
         dir.mkdirs()
         return dir.absolutePath
     }

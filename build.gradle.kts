@@ -1,28 +1,65 @@
-import org.jetbrains.compose.desktop.application.dsl.TargetFormat
-
 plugins {
-    kotlin("jvm") version "1.9.21"
+    id("com.android.application") version "8.2.0"
+    kotlin("android") version "1.9.21"
     kotlin("plugin.serialization") version "1.9.21"
-    id("org.jetbrains.compose") version "1.5.11"
 }
 
-group = "com.xenlon.instadownloader"
-version = "1.0.0"
+android {
+    namespace = "com.xenlon.instadownloader"
+    compileSdk = 34
 
-repositories {
-    google()
-    mavenCentral()
-    maven("https://maven.pkg.jetbrains.space/public/p/compose/dev")
+    defaultConfig {
+        applicationId = "com.xenlon.instadownloader"
+        minSdk = 26
+        targetSdk = 34
+        versionCode = 1
+        versionName = "1.0.0"
+    }
+
+    buildFeatures {
+        compose = true
+    }
+
+    composeOptions {
+        kotlinCompilerExtensionVersion = "1.5.7"
+    }
+
+    buildTypes {
+        release {
+            isMinifyEnabled = false
+            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"))
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
+    }
+
+    kotlinOptions {
+        jvmTarget = "17"
+    }
+
+    packaging {
+        resources {
+            excludes += "/META-INF/{AL2.0,LGPL2.1}"
+        }
+    }
 }
 
 dependencies {
-    implementation(compose.desktop.currentOs)
-    implementation(compose.material3)
-    implementation(compose.materialIconsExtended)
+    // Compose BOM
+    implementation(platform("androidx.compose:compose-bom:2024.01.00"))
+    implementation("androidx.compose.material3:material3")
+    implementation("androidx.compose.material:material-icons-extended")
+    implementation("androidx.compose.ui:ui")
+    implementation("androidx.compose.ui:ui-tooling-preview")
+    implementation("androidx.compose.animation:animation")
+    implementation("androidx.activity:activity-compose:1.8.2")
 
-    // HTTP Client
+    // HTTP Client (OkHttp engine for Android)
     implementation("io.ktor:ktor-client-core:2.3.7")
-    implementation("io.ktor:ktor-client-cio:2.3.7")
+    implementation("io.ktor:ktor-client-okhttp:2.3.7")
     implementation("io.ktor:ktor-client-content-negotiation:2.3.7")
     implementation("io.ktor:ktor-serialization-kotlinx-json:2.3.7")
 
@@ -31,36 +68,5 @@ dependencies {
 
     // Coroutines
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.7.3")
-    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-swing:1.7.3")
-
-    // Image loading
-    implementation("org.jetbrains.compose.components:components-resources:1.5.11")
-}
-
-compose.desktop {
-    application {
-        mainClass = "com.xenlon.instadownloader.MainKt"
-
-        nativeDistributions {
-            targetFormats(TargetFormat.Dmg, TargetFormat.Msi, TargetFormat.Deb)
-            packageName = "InstaDownloader"
-            packageVersion = "1.0.0"
-            description = "Anonymous Instagram Downloader"
-            vendor = "XenLon"
-
-            linux {
-                iconFile.set(project.file("src/main/resources/icon.png"))
-            }
-            windows {
-                iconFile.set(project.file("src/main/resources/icon.ico"))
-            }
-            macOS {
-                iconFile.set(project.file("src/main/resources/icon.icns"))
-            }
-        }
-    }
-}
-
-kotlin {
-    jvmToolchain(17)
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3")
 }

@@ -2,7 +2,7 @@ package com.xenlon.instadownloader.service
 
 import com.xenlon.instadownloader.model.*
 import io.ktor.client.*
-import io.ktor.client.engine.cio.*
+import io.ktor.client.engine.okhttp.*
 import io.ktor.client.plugins.*
 import io.ktor.client.plugins.cookies.*
 import io.ktor.client.request.*
@@ -27,7 +27,7 @@ class InstagramService {
 
     private val cookieStorage = AcceptAllCookiesStorage()
 
-    private val client = HttpClient(CIO) {
+    private val client = HttpClient(OkHttp) {
         install(HttpCookies) {
             storage = cookieStorage
         }

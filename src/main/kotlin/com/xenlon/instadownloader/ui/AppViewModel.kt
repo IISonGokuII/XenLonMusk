@@ -249,22 +249,10 @@ class AppViewModel {
     }
 
     /**
-     * Opens the download folder in the file manager.
+     * Returns the download directory path.
+     * Opening the folder on Android is handled by the Activity.
      */
-    fun openDownloadFolder() {
-        val dir = downloadManager.getDownloadDir()
-        try {
-            val os = System.getProperty("os.name").lowercase()
-            val command = when {
-                os.contains("win") -> arrayOf("explorer.exe", dir)
-                os.contains("mac") -> arrayOf("open", dir)
-                else -> arrayOf("xdg-open", dir)
-            }
-            Runtime.getRuntime().exec(command)
-        } catch (_: Exception) {
-            // Silently ignore if file manager can't be opened
-        }
-    }
+    fun getDownloadDir(): String = downloadManager.getDownloadDir()
 
     fun dispose() {
         scope.cancel()

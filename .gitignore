@@ -24,5 +24,16 @@ out/
 .DS_Store
 Thumbs.db
 
+# Android
+*.apk
+*.aab
+*.dex
+*.ap_
+*.log
+captures/
+
 # Local config
 local.properties
+keystore.properties
+*.jks
+*.keystore
