@@ -32,6 +32,7 @@ fun MainScreen(
     stories: DownloadResult<List<StoryItem>>,
     highlights: DownloadResult<List<HighlightReel>>,
     downloadProgress: DownloadProgress,
+    isAnonymousMode: Boolean = false,
     onSearchUser: (String) -> Unit,
     onDownloadProfilePic: () -> Unit,
     onDownloadStories: () -> Unit,
@@ -99,6 +100,35 @@ fun MainScreen(
                 .padding(20.dp),
             verticalArrangement = Arrangement.spacedBy(20.dp)
         ) {
+            // Anonymous mode banner
+            if (isAnonymousMode) {
+                Card(
+                    shape = RoundedCornerShape(14.dp),
+                    colors = CardDefaults.cardColors(containerColor = Color(0xFF1A2A3D))
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(14.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        Icon(
+                            Icons.Default.VisibilityOff,
+                            contentDescription = null,
+                            tint = AccentPurple,
+                            modifier = Modifier.size(20.dp)
+                        )
+                        Text(
+                            "Anonymer Modus - Profilsuche & Profilbilder ohne Login. " +
+                                "Für Stories & Highlights melde dich an.",
+                            color = TextSecondary,
+                            fontSize = 13.sp,
+                            lineHeight = 18.sp,
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
+                }
+            }
+
             // Search bar
             SearchBar(
                 query = searchQuery,
@@ -126,17 +156,33 @@ fun MainScreen(
                 )
 
                 // Stories section
-                StoriesSection(
-                    stories = stories,
-                    onDownloadStories = onDownloadStories
-                )
+                if (isAnonymousMode) {
+                    AnonymousLimitCard(
+                        title = "Stories",
+                        icon = Icons.Default.AutoStories,
+                        gradientColors = listOf(InstagramPink, InstagramOrange)
+                    )
+                } else {
+                    StoriesSection(
+                        stories = stories,
+                        onDownloadStories = onDownloadStories
+                    )
+                }
 
                 // Highlights section
-                HighlightsSection(
-                    highlights = highlights,
-                    onDownloadHighlight = onDownloadHighlight,
-                    onDownloadAllHighlights = onDownloadAllHighlights
-                )
+                if (isAnonymousMode) {
+                    AnonymousLimitCard(
+                        title = "Highlights",
+                        icon = Icons.Default.Stars,
+                        gradientColors = listOf(InstagramPurple, InstagramPink)
+                    )
+                } else {
+                    HighlightsSection(
+                        highlights = highlights,
+                        onDownloadHighlight = onDownloadHighlight,
+                        onDownloadAllHighlights = onDownloadAllHighlights
+                    )
+                }
             } else if (!isSearching) {
                 // Welcome card
                 WelcomeCard()
@@ -739,6 +785,39 @@ private fun EmptyMessage(message: String) {
         Icon(Icons.Default.Info, contentDescription = null, tint = TextSecondary, modifier = Modifier.size(18.dp))
         Spacer(modifier = Modifier.width(8.dp))
         Text(message, color = TextSecondary, fontSize = 14.sp)
+    }
+}
+
+@Composable
+private fun AnonymousLimitCard(
+    title: String,
+    icon: ImageVector,
+    gradientColors: List<Color>
+) {
+    SectionCard(
+        title = title,
+        icon = icon,
+        gradientColors = gradientColors
+    ) {
+        Row(
+            modifier = Modifier.padding(8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            Icon(
+                Icons.Default.Lock,
+                contentDescription = null,
+                tint = WarningOrange,
+                modifier = Modifier.size(20.dp)
+            )
+            Text(
+                "Login erforderlich, um $title herunterzuladen.\n" +
+                    "Melde dich an, um auf $title zuzugreifen.",
+                color = TextSecondary,
+                fontSize = 13.sp,
+                lineHeight = 18.sp
+            )
+        }
     }
 }
 

@@ -192,13 +192,32 @@ class InstagramService {
     }
 
     /**
-     * Fetches user profile information using the authenticated session.
+     * Adds anonymous (unauthenticated) headers for public data access.
+     */
+    private fun HttpRequestBuilder.addAnonHeaders(referer: String = "$BASE_URL/") {
+        headers {
+            append(HttpHeaders.UserAgent, USER_AGENT)
+            append(HttpHeaders.Accept, "*/*")
+            append(HttpHeaders.AcceptLanguage, "de-DE,de;q=0.9,en-US;q=0.8,en;q=0.7")
+            append("X-IG-App-ID", IG_APP_ID)
+            append("X-Requested-With", "XMLHttpRequest")
+            append(HttpHeaders.Referrer, referer)
+            append("Sec-Fetch-Dest", "empty")
+            append("Sec-Fetch-Mode", "cors")
+            append("Sec-Fetch-Site", "same-origin")
+        }
+    }
+
+    /**
+     * Fetches user profile information. Works both anonymously and authenticated.
+     * Anonymous mode can access public profiles only.
      */
     suspend fun fetchUserProfile(username: String): DownloadResult<UserProfile> = withContext(Dispatchers.IO) {
         try {
             val response = client.get("$BASE_URL/api/v1/users/web_profile_info/") {
                 parameter("username", username)
-                addAuthHeaders("$BASE_URL/$username/")
+                if (isLoggedIn) addAuthHeaders("$BASE_URL/$username/")
+                else addAnonHeaders("$BASE_URL/$username/")
             }
 
             if (response.status != HttpStatusCode.OK) {

@@ -24,6 +24,10 @@ class AppViewModel {
     private val _currentScreen = MutableStateFlow(Screen.LOGIN)
     val currentScreen: StateFlow<Screen> = _currentScreen.asStateFlow()
 
+    // Anonymous mode
+    private val _isAnonymousMode = MutableStateFlow(false)
+    val isAnonymousMode: StateFlow<Boolean> = _isAnonymousMode.asStateFlow()
+
     // Login state
     private val _isLoginLoading = MutableStateFlow(false)
     val isLoginLoading: StateFlow<Boolean> = _isLoginLoading.asStateFlow()
@@ -67,6 +71,14 @@ class AppViewModel {
 
             _isLoginLoading.value = false
         }
+    }
+
+    /**
+     * Enters anonymous mode (no login required, limited to public profiles).
+     */
+    fun enterAnonymousMode() {
+        _isAnonymousMode.value = true
+        _currentScreen.value = Screen.MAIN
     }
 
     /**
@@ -154,12 +166,15 @@ class AppViewModel {
      */
     fun logout() {
         scope.launch {
-            instagramService.logout()
+            if (!_isAnonymousMode.value) {
+                instagramService.logout()
+            }
             _currentScreen.value = Screen.LOGIN
             _currentProfile.value = null
             _stories.value = DownloadResult.Loading
             _highlights.value = DownloadResult.Loading
             _loginError.value = null
+            _isAnonymousMode.value = false
         }
     }
 

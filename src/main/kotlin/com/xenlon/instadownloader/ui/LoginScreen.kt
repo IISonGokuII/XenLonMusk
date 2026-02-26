@@ -1,6 +1,7 @@
 package com.xenlon.instadownloader.ui
 
 import androidx.compose.animation.*
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -26,6 +27,7 @@ import androidx.compose.ui.unit.sp
 @Composable
 fun LoginScreen(
     onLogin: (username: String, password: String) -> Unit,
+    onAnonymousMode: () -> Unit,
     isLoading: Boolean = false,
     errorMessage: String? = null
 ) {
@@ -204,28 +206,85 @@ fun LoginScreen(
                     }
                 }
 
+                // Divider with "oder"
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    HorizontalDivider(
+                        modifier = Modifier.weight(1f),
+                        color = Color(0xFF444458)
+                    )
+                    Text(
+                        "  oder  ",
+                        color = TextSecondary,
+                        fontSize = 13.sp
+                    )
+                    HorizontalDivider(
+                        modifier = Modifier.weight(1f),
+                        color = Color(0xFF444458)
+                    )
+                }
+
+                // Anonymous mode button
+                OutlinedButton(
+                    onClick = onAnonymousMode,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(52.dp),
+                    shape = RoundedCornerShape(14.dp),
+                    enabled = !isLoading,
+                    colors = ButtonDefaults.outlinedButtonColors(
+                        contentColor = AccentPurple
+                    ),
+                    border = BorderStroke(1.dp, AccentPurple.copy(alpha = 0.5f))
+                ) {
+                    Icon(Icons.Default.VisibilityOff, contentDescription = null)
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("Anonym fortfahren", fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+                }
+
                 // Info text
                 Card(
                     colors = CardDefaults.cardColors(containerColor = DarkSurfaceVariant),
                     shape = RoundedCornerShape(12.dp)
                 ) {
-                    Row(
-                        modifier = Modifier.padding(12.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        Icon(
-                            Icons.Default.Shield,
-                            contentDescription = null,
-                            tint = AccentPurple,
-                            modifier = Modifier.size(18.dp)
-                        )
-                        Text(
-                            text = "Deine Daten werden nur lokal gespeichert und nie an Dritte weitergegeben.",
-                            color = TextSecondary,
-                            fontSize = 12.sp,
-                            lineHeight = 16.sp
-                        )
+                    Column(modifier = Modifier.padding(12.dp)) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Icon(
+                                Icons.Default.Shield,
+                                contentDescription = null,
+                                tint = AccentPurple,
+                                modifier = Modifier.size(18.dp)
+                            )
+                            Text(
+                                text = "Deine Daten werden nur lokal gespeichert und nie an Dritte weitergegeben.",
+                                color = TextSecondary,
+                                fontSize = 12.sp,
+                                lineHeight = 16.sp
+                            )
+                        }
+                        Spacer(modifier = Modifier.height(6.dp))
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Icon(
+                                Icons.Default.Info,
+                                contentDescription = null,
+                                tint = TextSecondary,
+                                modifier = Modifier.size(18.dp)
+                            )
+                            Text(
+                                text = "Anonym: Nur Profilbilder öffentlicher Profile.\nMit Login: Stories + Highlights + Profilbilder.",
+                                color = TextSecondary,
+                                fontSize = 11.sp,
+                                lineHeight = 15.sp
+                            )
+                        }
                     }
                 }
             }

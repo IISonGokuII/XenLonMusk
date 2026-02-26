@@ -33,11 +33,13 @@ fun main() = application {
             val stories by viewModel.stories.collectAsState()
             val highlights by viewModel.highlights.collectAsState()
             val downloadProgress by viewModel.downloadProgress.collectAsState()
+            val isAnonymousMode by viewModel.isAnonymousMode.collectAsState()
 
             when (currentScreen) {
                 AppViewModel.Screen.LOGIN -> {
                     LoginScreen(
                         onLogin = { username, password -> viewModel.login(username, password) },
+                        onAnonymousMode = { viewModel.enterAnonymousMode() },
                         isLoading = isLoginLoading,
                         errorMessage = loginError
                     )
@@ -49,6 +51,7 @@ fun main() = application {
                         stories = stories,
                         highlights = highlights,
                         downloadProgress = downloadProgress,
+                        isAnonymousMode = isAnonymousMode,
                         onSearchUser = { viewModel.searchUser(it) },
                         onDownloadProfilePic = { viewModel.downloadProfilePicture() },
                         onDownloadStories = { viewModel.downloadStories() },
