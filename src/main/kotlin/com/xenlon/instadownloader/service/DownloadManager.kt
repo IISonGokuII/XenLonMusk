@@ -1,0 +1,482 @@
+package com.xenlon.instadownloader.service
+
+import com.xenlon.instadownloader.model.*
+import kotlinx.coroutines.*
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import java.io.File
+import java.text.SimpleDateFormat
+import java.util.*
+
+/**
+ * Manages downloading of Instagram content (stories, highlights, profile pictures).
+ */
+class DownloadManager(
+    private val instagramService: InstagramService = InstagramService()
+) {
+    private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+
+    private val _downloadProgress = MutableStateFlow<DownloadProgress>(DownloadProgress.Idle)
+    val downloadProgress: StateFlow<DownloadProgress> = _downloadProgress.asStateFlow()
+
+    private val _currentProfile = MutableStateFlow<DownloadResult<UserProfile>>(DownloadResult.Loading)
+    val currentProfile: StateFlow<DownloadResult<UserProfile>> = _currentProfile.asStateFlow()
+
+    private val _stories = MutableStateFlow<DownloadResult<List<StoryItem>>>(DownloadResult.Loading)
+    val stories: StateFlow<DownloadResult<List<StoryItem>>> = _stories.asStateFlow()
+
+    private val _highlights = MutableStateFlow<DownloadResult<List<HighlightReel>>>(DownloadResult.Loading)
+    val highlights: StateFlow<DownloadResult<List<HighlightReel>>> = _highlights.asStateFlow()
+
+    private val dateFormat = SimpleDateFormat("yyyy-MM-dd_HH-mm-ss", Locale.getDefault())
+
+    /**
+     * Gets the default download directory (Downloads/InstaDownloader on Android).
+     * Creates a .nomedia file to hide content from the system gallery.
+     */
+    fun getDownloadDir(): String {
+        val downloadsDir = android.os.Environment.getExternalStoragePublicDirectory(
+            android.os.Environment.DIRECTORY_DOWNLOADS
+        )
+        val dir = File(downloadsDir, "InstaDownloader")
+        dir.mkdirs()
+        // .nomedia prevents Android MediaScanner from indexing these files
+        val nomedia = File(dir, ".nomedia")
+        if (!nomedia.exists()) {
+            nomedia.createNewFile()
+        }
+        return dir.absolutePath
+    }
+
+    /**
+     * Loads the profile of the given username.
+     */
+    suspend fun loadProfile(username: String): DownloadResult<UserProfile> {
+        _currentProfile.value = DownloadResult.Loading
+        _stories.value = DownloadResult.Loading
+        _highlights.value = DownloadResult.Loading
+
+        val result = instagramService.fetchUserProfile(username)
+        _currentProfile.value = result
+
+        // If profile loaded, fetch stories and highlights in parallel
+        if (result is DownloadResult.Success) {
+            val userId = result.data.userId
+            if (userId.isNotEmpty()) {
+                scope.launch {
+                    _stories.value = instagramService.fetchStories(userId)
+                }
+                scope.launch {
+                    _highlights.value = instagramService.fetchHighlights(userId)
+                }
+            }
+        }
+
+        return result
+    }
+
+    /**
+     * Downloads the profile picture of the current user.
+     */
+    suspend fun downloadProfilePicture(profile: UserProfile, downloadDir: String = getDownloadDir()): DownloadResult<String> {
+        _downloadProgress.value = DownloadProgress.Downloading(0, 1, "Profilbild")
+
+        val url = profile.profilePicUrlHD.ifEmpty { profile.profilePicUrl }
+        if (url.isEmpty()) {
+            _downloadProgress.value = DownloadProgress.Error("Kein Profilbild verfügbar")
+            return DownloadResult.Error("Kein Profilbild verfügbar")
+        }
+
+        val extension = getExtension(url)
+        val filename = "${profile.username}_profile_pic.$extension"
+        val outputPath = File(downloadDir, "${profile.username}/$filename").absolutePath
+
+        val result = instagramService.downloadFile(url, outputPath)
+        _downloadProgress.value = when (result) {
+            is DownloadResult.Success -> DownloadProgress.Complete(1, "Profilbild")
+            is DownloadResult.Error -> DownloadProgress.Error(result.message)
+            else -> DownloadProgress.Idle
+        }
+
+        return result
+    }
+
+    /**
+     * Downloads all stories of the current user.
+     */
+    suspend fun downloadStories(
+        profile: UserProfile,
+        storyItems: List<StoryItem>,
+        downloadDir: String = getDownloadDir()
+    ): DownloadResult<List<String>> {
+        if (storyItems.isEmpty()) {
+            _downloadProgress.value = DownloadProgress.Error("Keine Stories zum Download verfügbar")
+            return DownloadResult.Error("Keine Stories verfügbar")
+        }
+
+        val downloadedFiles = mutableListOf<String>()
+        val total = storyItems.size
+
+        storyItems.forEachIndexed { index, story ->
+            _downloadProgress.value = DownloadProgress.Downloading(index, total, "Story ${index + 1}/$total")
+
+            val extension = if (story.type == MediaType.VIDEO) "mp4" else getExtension(story.mediaUrl)
+            val timestamp = dateFormat.format(Date(story.timestamp * 1000))
+            val filename = "${profile.username}_story_${timestamp}_${story.id}.$extension"
+            val outputPath = File(downloadDir, "${profile.username}/stories/$filename").absolutePath
+
+            when (val result = instagramService.downloadFile(story.mediaUrl, outputPath)) {
+                is DownloadResult.Success -> downloadedFiles.add(result.data)
+                is DownloadResult.Error -> { /* Skip failed items, continue downloading */ }
+                else -> {}
+            }
+        }
+
+        _downloadProgress.value = DownloadProgress.Complete(downloadedFiles.size, "Stories")
+        return DownloadResult.Success(downloadedFiles)
+    }
+
+    /**
+     * Downloads all items from a highlight reel.
+     */
+    suspend fun downloadHighlight(
+        profile: UserProfile,
+        highlight: HighlightReel,
+        downloadDir: String = getDownloadDir()
+    ): DownloadResult<List<String>> {
+        _downloadProgress.value = DownloadProgress.Downloading(0, 1, "Highlight: ${highlight.title}")
+
+        val itemsResult = instagramService.fetchHighlightItems(highlight.id)
+        if (itemsResult is DownloadResult.Error) {
+            _downloadProgress.value = DownloadProgress.Error(itemsResult.message)
+            return DownloadResult.Error(itemsResult.message)
+        }
+
+        val items = (itemsResult as DownloadResult.Success).data
+        if (items.isEmpty()) {
+            _downloadProgress.value = DownloadProgress.Error("Keine Highlight-Inhalte verfügbar")
+            return DownloadResult.Error("Keine Highlight-Inhalte")
+        }
+
+        val downloadedFiles = mutableListOf<String>()
+        val total = items.size
+        val safeTitle = highlight.title.replace(Regex("[^a-zA-Z0-9_-]"), "_")
+
+        items.forEachIndexed { index, item ->
+            _downloadProgress.value = DownloadProgress.Downloading(
+                index, total, "Highlight '${highlight.title}' ${index + 1}/$total"
+            )
+
+            val extension = if (item.type == MediaType.VIDEO) "mp4" else getExtension(item.mediaUrl)
+            val filename = "${profile.username}_highlight_${safeTitle}_${item.id}.$extension"
+            val outputPath = File(downloadDir, "${profile.username}/highlights/$safeTitle/$filename").absolutePath
+
+            when (val result = instagramService.downloadFile(item.mediaUrl, outputPath)) {
+                is DownloadResult.Success -> downloadedFiles.add(result.data)
+                is DownloadResult.Error -> { /* Skip failed items */ }
+                else -> {}
+            }
+        }
+
+        _downloadProgress.value = DownloadProgress.Complete(downloadedFiles.size, "Highlight '${highlight.title}'")
+        return DownloadResult.Success(downloadedFiles)
+    }
+
+    /**
+     * Downloads all highlights for a user.
+     */
+    suspend fun downloadAllHighlights(
+        profile: UserProfile,
+        highlightReels: List<HighlightReel>,
+        downloadDir: String = getDownloadDir()
+    ): DownloadResult<Int> {
+        var totalDownloaded = 0
+        highlightReels.forEachIndexed { index, highlight ->
+            val result = downloadHighlight(profile, highlight, downloadDir)
+            if (result is DownloadResult.Success) {
+                totalDownloaded += result.data.size
+            }
+        }
+        _downloadProgress.value = DownloadProgress.Complete(totalDownloaded, "Alle Highlights")
+        return DownloadResult.Success(totalDownloaded)
+    }
+
+    /**
+     * Downloads all feed posts (posted images/videos) for a user.
+     */
+    suspend fun downloadFeedPosts(
+        profile: UserProfile,
+        posts: List<FeedPost>,
+        downloadDir: String = getDownloadDir()
+    ): DownloadResult<List<String>> {
+        if (posts.isEmpty()) {
+            _downloadProgress.value = DownloadProgress.Error("Keine Posts zum Download verfügbar")
+            return DownloadResult.Error("Keine Posts verfügbar")
+        }
+
+        val downloadedFiles = mutableListOf<String>()
+        // Count total media items across all posts (carousels have multiple)
+        val totalMedia = posts.sumOf { it.mediaUrls.size }
+        var currentItem = 0
+
+        posts.forEachIndexed { postIndex, post ->
+            val timestamp = dateFormat.format(Date(post.timestamp * 1000))
+
+            post.mediaUrls.forEachIndexed { mediaIndex, url ->
+                currentItem++
+                _downloadProgress.value = DownloadProgress.Downloading(
+                    currentItem, totalMedia, "Post $currentItem/$totalMedia"
+                )
+
+                val isVideo = url.contains(".mp4") || (post.type == MediaType.VIDEO && post.mediaUrls.size == 1)
+                val extension = if (isVideo) "mp4" else getExtension(url)
+                val carouselSuffix = if (post.isCarousel) "_${mediaIndex + 1}" else ""
+                val filename = "${profile.username}_post_${timestamp}_${post.shortcode}${carouselSuffix}.$extension"
+                val outputPath = File(downloadDir, "${profile.username}/posts/$filename").absolutePath
+
+                when (val result = instagramService.downloadFile(url, outputPath)) {
+                    is DownloadResult.Success -> downloadedFiles.add(result.data)
+                    is DownloadResult.Error -> { /* Skip failed items */ }
+                    else -> {}
+                }
+            }
+        }
+
+        _downloadProgress.value = DownloadProgress.Complete(downloadedFiles.size, "Posts")
+        return DownloadResult.Success(downloadedFiles)
+    }
+
+    /**
+     * Downloads archived posts for the logged-in user.
+     */
+    suspend fun downloadArchivedPosts(
+        username: String,
+        posts: List<FeedPost>,
+        downloadDir: String = getDownloadDir()
+    ): DownloadResult<List<String>> {
+        if (posts.isEmpty()) {
+            _downloadProgress.value = DownloadProgress.Error("Keine archivierten Posts zum Download verfügbar")
+            return DownloadResult.Error("Keine archivierten Posts verfügbar")
+        }
+
+        val downloadedFiles = mutableListOf<String>()
+        val totalMedia = posts.sumOf { it.mediaUrls.size }
+        var currentItem = 0
+
+        posts.forEachIndexed { _, post ->
+            val timestamp = dateFormat.format(Date(post.timestamp * 1000))
+
+            post.mediaUrls.forEachIndexed { mediaIndex, url ->
+                currentItem++
+                _downloadProgress.value = DownloadProgress.Downloading(
+                    currentItem, totalMedia, "Archiv-Post $currentItem/$totalMedia"
+                )
+
+                val isVideo = url.contains(".mp4") || (post.type == MediaType.VIDEO && post.mediaUrls.size == 1)
+                val extension = if (isVideo) "mp4" else getExtension(url)
+                val carouselSuffix = if (post.isCarousel) "_${mediaIndex + 1}" else ""
+                val filename = "${username}_archive_${timestamp}_${post.shortcode}${carouselSuffix}.$extension"
+                val outputPath = File(downloadDir, "$username/archive/$filename").absolutePath
+
+                when (val result = instagramService.downloadFile(url, outputPath)) {
+                    is DownloadResult.Success -> downloadedFiles.add(result.data)
+                    is DownloadResult.Error -> { /* Skip failed items */ }
+                    else -> {}
+                }
+            }
+        }
+
+        _downloadProgress.value = DownloadProgress.Complete(downloadedFiles.size, "Archiv-Posts")
+        return DownloadResult.Success(downloadedFiles)
+    }
+
+    /**
+     * Downloads all reels for a user.
+     */
+    suspend fun downloadReels(
+        profile: UserProfile,
+        reels: List<FeedPost>,
+        downloadDir: String = getDownloadDir()
+    ): DownloadResult<List<String>> {
+        if (reels.isEmpty()) {
+            _downloadProgress.value = DownloadProgress.Error("Keine Reels zum Download verfügbar")
+            return DownloadResult.Error("Keine Reels verfügbar")
+        }
+
+        val downloadedFiles = mutableListOf<String>()
+        val total = reels.size
+
+        reels.forEachIndexed { index, reel ->
+            _downloadProgress.value = DownloadProgress.Downloading(index, total, "Reel ${index + 1}/$total")
+
+            val timestamp = dateFormat.format(Date(reel.timestamp * 1000))
+
+            reel.mediaUrls.forEach { url ->
+                val extension = "mp4"
+                val filename = "${profile.username}_reel_${timestamp}_${reel.shortcode}.$extension"
+                val outputPath = File(downloadDir, "${profile.username}/reels/$filename").absolutePath
+
+                when (val result = instagramService.downloadFile(url, outputPath)) {
+                    is DownloadResult.Success -> downloadedFiles.add(result.data)
+                    is DownloadResult.Error -> { /* Skip failed items */ }
+                    else -> {}
+                }
+            }
+        }
+
+        _downloadProgress.value = DownloadProgress.Complete(downloadedFiles.size, "Reels")
+        return DownloadResult.Success(downloadedFiles)
+    }
+
+    /**
+     * Downloads saved/bookmarked posts.
+     */
+    suspend fun downloadSavedPosts(
+        posts: List<FeedPost>,
+        downloadDir: String = getDownloadDir()
+    ): DownloadResult<List<String>> {
+        if (posts.isEmpty()) {
+            _downloadProgress.value = DownloadProgress.Error("Keine gespeicherten Posts zum Download verfügbar")
+            return DownloadResult.Error("Keine gespeicherten Posts verfügbar")
+        }
+
+        val downloadedFiles = mutableListOf<String>()
+        val totalMedia = posts.sumOf { it.mediaUrls.size }
+        var currentItem = 0
+
+        posts.forEachIndexed { _, post ->
+            val timestamp = dateFormat.format(Date(post.timestamp * 1000))
+
+            post.mediaUrls.forEachIndexed { mediaIndex, url ->
+                currentItem++
+                _downloadProgress.value = DownloadProgress.Downloading(
+                    currentItem, totalMedia, "Gespeicherter Post $currentItem/$totalMedia"
+                )
+
+                val isVideo = url.contains(".mp4") || (post.type == MediaType.VIDEO && post.mediaUrls.size == 1)
+                val extension = if (isVideo) "mp4" else getExtension(url)
+                val carouselSuffix = if (post.isCarousel) "_${mediaIndex + 1}" else ""
+                val filename = "saved_${timestamp}_${post.shortcode}${carouselSuffix}.$extension"
+                val outputPath = File(downloadDir, "saved/$filename").absolutePath
+
+                when (val result = instagramService.downloadFile(url, outputPath)) {
+                    is DownloadResult.Success -> downloadedFiles.add(result.data)
+                    is DownloadResult.Error -> { /* Skip failed items */ }
+                    else -> {}
+                }
+            }
+        }
+
+        _downloadProgress.value = DownloadProgress.Complete(downloadedFiles.size, "Gespeicherte Posts")
+        return DownloadResult.Success(downloadedFiles)
+    }
+
+    /**
+     * Downloads tagged posts for a user.
+     */
+    suspend fun downloadTaggedPosts(
+        profile: UserProfile,
+        posts: List<FeedPost>,
+        downloadDir: String = getDownloadDir()
+    ): DownloadResult<List<String>> {
+        if (posts.isEmpty()) {
+            _downloadProgress.value = DownloadProgress.Error("Keine markierten Posts zum Download verfügbar")
+            return DownloadResult.Error("Keine markierten Posts verfügbar")
+        }
+
+        val downloadedFiles = mutableListOf<String>()
+        val totalMedia = posts.sumOf { it.mediaUrls.size }
+        var currentItem = 0
+
+        posts.forEachIndexed { _, post ->
+            val timestamp = dateFormat.format(Date(post.timestamp * 1000))
+
+            post.mediaUrls.forEachIndexed { mediaIndex, url ->
+                currentItem++
+                _downloadProgress.value = DownloadProgress.Downloading(
+                    currentItem, totalMedia, "Markierter Post $currentItem/$totalMedia"
+                )
+
+                val isVideo = url.contains(".mp4") || (post.type == MediaType.VIDEO && post.mediaUrls.size == 1)
+                val extension = if (isVideo) "mp4" else getExtension(url)
+                val carouselSuffix = if (post.isCarousel) "_${mediaIndex + 1}" else ""
+                val filename = "${profile.username}_tagged_${timestamp}_${post.shortcode}${carouselSuffix}.$extension"
+                val outputPath = File(downloadDir, "${profile.username}/tagged/$filename").absolutePath
+
+                when (val result = instagramService.downloadFile(url, outputPath)) {
+                    is DownloadResult.Success -> downloadedFiles.add(result.data)
+                    is DownloadResult.Error -> { /* Skip failed items */ }
+                    else -> {}
+                }
+            }
+        }
+
+        _downloadProgress.value = DownloadProgress.Complete(downloadedFiles.size, "Markierte Posts")
+        return DownloadResult.Success(downloadedFiles)
+    }
+
+    /**
+     * Downloads a single shared post.
+     */
+    suspend fun downloadSharedPost(
+        post: FeedPost,
+        downloadDir: String = getDownloadDir()
+    ): DownloadResult<List<String>> {
+        val downloadedFiles = mutableListOf<String>()
+        val totalMedia = post.mediaUrls.size
+        var currentItem = 0
+
+        val timestamp = dateFormat.format(Date(post.timestamp * 1000))
+
+        post.mediaUrls.forEachIndexed { mediaIndex, url ->
+            currentItem++
+            _downloadProgress.value = DownloadProgress.Downloading(
+                currentItem, totalMedia, "Geteilter Post $currentItem/$totalMedia"
+            )
+
+            val isVideo = url.contains(".mp4") || (post.type == MediaType.VIDEO && post.mediaUrls.size == 1)
+            val extension = if (isVideo) "mp4" else getExtension(url)
+            val carouselSuffix = if (post.isCarousel) "_${mediaIndex + 1}" else ""
+            val filename = "shared_${timestamp}_${post.shortcode}${carouselSuffix}.$extension"
+            val outputPath = File(downloadDir, "shared/$filename").absolutePath
+
+            when (val result = instagramService.downloadFile(url, outputPath)) {
+                is DownloadResult.Success -> downloadedFiles.add(result.data)
+                is DownloadResult.Error -> { /* Skip failed items */ }
+                else -> {}
+            }
+        }
+
+        _downloadProgress.value = DownloadProgress.Complete(downloadedFiles.size, "Geteilter Post")
+        return DownloadResult.Success(downloadedFiles)
+    }
+
+    fun resetProgress() {
+        _downloadProgress.value = DownloadProgress.Idle
+    }
+
+    fun close() {
+        scope.cancel()
+        instagramService.close()
+    }
+
+    private fun getExtension(url: String): String {
+        return when {
+            url.contains(".mp4") -> "mp4"
+            url.contains(".webp") -> "webp"
+            url.contains(".png") -> "png"
+            else -> "jpg"
+        }
+    }
+}
+
+/**
+ * Represents the current download progress state.
+ */
+sealed class DownloadProgress {
+    data object Idle : DownloadProgress()
+    data class Downloading(val current: Int, val total: Int, val label: String) : DownloadProgress()
+    data class Complete(val count: Int, val label: String) : DownloadProgress()
+    data class Error(val message: String) : DownloadProgress()
+}
