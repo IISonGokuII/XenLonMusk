@@ -9,6 +9,7 @@ import io.ktor.client.request.*
 import io.ktor.client.request.forms.*
 import io.ktor.client.statement.*
 import io.ktor.http.*
+import io.ktor.utils.io.toByteArray
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.*
@@ -1040,7 +1041,7 @@ class InstagramService {
 
             val file = java.io.File(outputPath)
             file.parentFile?.mkdirs()
-            file.writeBytes(response.readBytes())
+            file.writeBytes(response.bodyAsChannel().toByteArray())
 
             DownloadResult.Success(outputPath)
         } catch (e: Exception) {
