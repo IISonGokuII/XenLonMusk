@@ -376,7 +376,7 @@ private fun TwoFactorContent(
         },
         label = { Text("6-stelliger Code") },
         leadingIcon = {
-            Icon(Icons.Default.Pin, contentDescription = null, tint = TextSecondary)
+            Icon(Icons.Default.Dialpad, contentDescription = null, tint = TextSecondary)
         },
         modifier = Modifier.fillMaxWidth(),
         singleLine = true,

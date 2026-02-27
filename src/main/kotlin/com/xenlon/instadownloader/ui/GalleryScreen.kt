@@ -480,7 +480,7 @@ private fun UserFolderScreen(
                 }
                 IconButton(onClick = onToggleMultiSelect) {
                     Icon(
-                        if (isMultiSelectMode) Icons.Default.Close else Icons.Default.ChecklistRtl,
+                        if (isMultiSelectMode) Icons.Default.Close else Icons.Default.DoneAll,
                         "Mehrfachauswahl",
                         tint = if (isMultiSelectMode) AccentPink else TextSecondary
                     )
