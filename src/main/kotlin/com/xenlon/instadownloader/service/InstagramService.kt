@@ -41,6 +41,27 @@ class InstagramService {
     private var csrfToken: String = ""
     private var isLoggedIn: Boolean = false
     private var sessionUserId: String = ""
+    var preferHD: Boolean = true
+
+    /**
+     * Picks the best image URL from a candidates array based on quality preference.
+     * HD = first (largest), SD = last (smallest).
+     */
+    private fun pickImageCandidate(candidates: JsonArray?): String {
+        if (candidates.isNullOrEmpty()) return ""
+        val index = if (preferHD) 0 else candidates.size - 1
+        return candidates[index].jsonObject["url"]?.jsonPrimitive?.content ?: ""
+    }
+
+    /**
+     * Picks the best video URL from a video_versions array based on quality preference.
+     * HD = first (largest), SD = last (smallest).
+     */
+    private fun pickVideoVersion(versions: JsonArray?): String {
+        if (versions.isNullOrEmpty()) return ""
+        val index = if (preferHD) 0 else versions.size - 1
+        return versions[index].jsonObject["url"]?.jsonPrimitive?.content ?: ""
+    }
 
     companion object {
         private const val BASE_URL = "https://www.instagram.com"
@@ -372,15 +393,12 @@ class InstagramService {
                 val mediaType = item["media_type"]?.jsonPrimitive?.content?.toIntOrNull() ?: 1
                 val isVideo = mediaType == 2
 
-                val imageUrl = item["image_versions2"]?.jsonObject
-                    ?.get("candidates")?.jsonArray
-                    ?.firstOrNull()?.jsonObject
-                    ?.get("url")?.jsonPrimitive?.content ?: ""
+                val imageUrl = pickImageCandidate(
+                    item["image_versions2"]?.jsonObject?.get("candidates")?.jsonArray
+                )
 
                 val videoUrl = if (isVideo) {
-                    item["video_versions"]?.jsonArray
-                        ?.firstOrNull()?.jsonObject
-                        ?.get("url")?.jsonPrimitive?.content ?: ""
+                    pickVideoVersion(item["video_versions"]?.jsonArray)
                 } else ""
 
                 StoryItem(
@@ -477,15 +495,12 @@ class InstagramService {
                 val mediaType = item["media_type"]?.jsonPrimitive?.content?.toIntOrNull() ?: 1
                 val isVideo = mediaType == 2
 
-                val imageUrl = item["image_versions2"]?.jsonObject
-                    ?.get("candidates")?.jsonArray
-                    ?.firstOrNull()?.jsonObject
-                    ?.get("url")?.jsonPrimitive?.content ?: ""
+                val imageUrl = pickImageCandidate(
+                    item["image_versions2"]?.jsonObject?.get("candidates")?.jsonArray
+                )
 
                 val videoUrl = if (isVideo) {
-                    item["video_versions"]?.jsonArray
-                        ?.firstOrNull()?.jsonObject
-                        ?.get("url")?.jsonPrimitive?.content ?: ""
+                    pickVideoVersion(item["video_versions"]?.jsonArray)
                 } else ""
 
                 StoryItem(

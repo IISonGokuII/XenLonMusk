@@ -12,6 +12,14 @@ enum class MediaType {
 }
 
 /**
+ * Quality preference for downloads.
+ */
+enum class DownloadQuality(val label: String) {
+    HD("HD - Beste Qualität"),
+    SD("SD - Kleinere Dateien")
+}
+
+/**
  * Represents a downloadable Instagram media item.
  */
 data class MediaItem(
