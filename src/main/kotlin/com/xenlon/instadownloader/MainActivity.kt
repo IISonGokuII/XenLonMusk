@@ -1,23 +1,41 @@
 package com.xenlon.instadownloader
 
+import android.Manifest
 import android.content.Intent
+import android.content.pm.PackageManager
+import android.os.Build
 import android.os.Bundle
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.*
+import androidx.core.content.ContextCompat
 import com.xenlon.instadownloader.ui.*
 
 class MainActivity : ComponentActivity() {
 
     private lateinit var viewModel: AppViewModel
 
+    private val notificationPermissionLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { /* no-op, just request */ }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
 
         viewModel = AppViewModel(applicationContext)
+
+        // Request notification permission on Android 13+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            if (ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS)
+                != PackageManager.PERMISSION_GRANTED
+            ) {
+                notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+            }
+        }
 
         // Handle share intent on launch
         handleIntent(intent)
@@ -43,6 +61,8 @@ class MainActivity : ComponentActivity() {
                 val isOwnProfile by viewModel.isOwnProfile.collectAsState()
                 val galleryItems by viewModel.galleryItems.collectAsState()
                 val searchHistory by viewModel.searchHistory.collectAsState()
+                val downloadQuality by viewModel.downloadQuality.collectAsState()
+                val clipboardUrl by viewModel.clipboardUrl.collectAsState()
 
                 when (currentScreen) {
                     AppViewModel.Screen.LOGIN -> {
@@ -73,6 +93,8 @@ class MainActivity : ComponentActivity() {
                             isAnonymousMode = isAnonymousMode,
                             isOwnProfile = isOwnProfile,
                             searchHistory = searchHistory,
+                            downloadQuality = downloadQuality,
+                            clipboardUrl = clipboardUrl,
                             onSearchUser = { viewModel.searchUser(it) },
                             onDownloadProfilePic = { viewModel.downloadProfilePicture() },
                             onDownloadStories = { viewModel.downloadStories() },
@@ -87,6 +109,9 @@ class MainActivity : ComponentActivity() {
                             onDismissSharedPost = { viewModel.dismissSharedPost() },
                             onToggleFavorite = { viewModel.toggleFavorite(it) },
                             onRemoveFromHistory = { viewModel.removeFromHistory(it) },
+                            onToggleQuality = { viewModel.toggleQuality() },
+                            onHandleClipboardUrl = { viewModel.handleClipboardUrl() },
+                            onDismissClipboardUrl = { viewModel.dismissClipboardUrl() },
                             onLogout = { viewModel.logout() },
                             onOpenGallery = { viewModel.openGallery() }
                         )
@@ -106,7 +131,23 @@ class MainActivity : ComponentActivity() {
                                     Toast.LENGTH_SHORT
                                 ).show()
                             },
-                            onDeleteItem = { viewModel.deleteGalleryItem(it) }
+                            onDeleteItem = { viewModel.deleteGalleryItem(it) },
+                            onSaveMultiple = { items ->
+                                viewModel.saveMultipleToGallery(context, items)
+                                Toast.makeText(
+                                    context,
+                                    "${items.size} Dateien in Galerie gespeichert",
+                                    Toast.LENGTH_SHORT
+                                ).show()
+                            },
+                            onDeleteMultiple = { items ->
+                                viewModel.deleteMultipleItems(items)
+                                Toast.makeText(
+                                    context,
+                                    "${items.size} Dateien gelöscht",
+                                    Toast.LENGTH_SHORT
+                                ).show()
+                            }
                         )
                     }
                 }

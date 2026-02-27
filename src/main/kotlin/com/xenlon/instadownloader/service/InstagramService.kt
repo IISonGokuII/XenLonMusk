@@ -63,6 +63,63 @@ class InstagramService {
         return versions[index].jsonObject["url"]?.jsonPrimitive?.content ?: ""
     }
 
+    /**
+     * Parses a v1 API media item (used in archive, saved, tagged, reels, shortcode endpoints)
+     * and returns (mediaUrls, thumbnailUrl, isVideo, isCarousel).
+     */
+    private fun parseV1MediaItem(item: JsonObject): FeedPost {
+        val mediaType = item["media_type"]?.jsonPrimitive?.content?.toIntOrNull() ?: 1
+        val isVideo = mediaType == 2
+        val isCarousel = mediaType == 8
+
+        val mediaUrls = mutableListOf<String>()
+
+        if (isCarousel) {
+            item["carousel_media"]?.jsonArray?.forEach { carouselItem ->
+                val ci = carouselItem.jsonObject
+                val ciType = ci["media_type"]?.jsonPrimitive?.content?.toIntOrNull() ?: 1
+                val ciIsVideo = ciType == 2
+                val url = if (ciIsVideo) {
+                    pickVideoVersion(ci["video_versions"]?.jsonArray)
+                } else {
+                    pickImageCandidate(ci["image_versions2"]?.jsonObject?.get("candidates")?.jsonArray)
+                }
+                if (url.isNotEmpty()) mediaUrls.add(url)
+            }
+        } else {
+            val url = if (isVideo) {
+                pickVideoVersion(item["video_versions"]?.jsonArray)
+            } else {
+                pickImageCandidate(item["image_versions2"]?.jsonObject?.get("candidates")?.jsonArray)
+            }
+            if (url.isNotEmpty()) mediaUrls.add(url)
+        }
+
+        val thumbnailUrl = pickImageCandidate(
+            item["image_versions2"]?.jsonObject?.get("candidates")?.jsonArray
+        )
+
+        val captionObj = item["caption"]?.jsonObject
+        val caption = captionObj?.get("text")?.jsonPrimitive?.content ?: ""
+        val code = item["code"]?.jsonPrimitive?.content ?: ""
+
+        return FeedPost(
+            id = item["id"]?.jsonPrimitive?.content ?: item["pk"]?.jsonPrimitive?.content ?: "",
+            shortcode = code,
+            mediaUrls = mediaUrls,
+            thumbnailUrl = thumbnailUrl,
+            type = when {
+                isVideo -> MediaType.VIDEO
+                else -> MediaType.IMAGE
+            },
+            isCarousel = isCarousel,
+            caption = caption,
+            timestamp = item["taken_at"]?.jsonPrimitive?.longOrNull ?: 0,
+            likeCount = item["like_count"]?.jsonPrimitive?.longOrNull ?: 0,
+            commentCount = item["comment_count"]?.jsonPrimitive?.longOrNull ?: 0
+        )
+    }
+
     companion object {
         private const val BASE_URL = "https://www.instagram.com"
         private const val LOGIN_URL = "$BASE_URL/accounts/login/ajax/"
@@ -659,74 +716,7 @@ class InstagramService {
                 if (items.isNullOrEmpty()) break
 
                 items.forEach { itemJson ->
-                    val item = itemJson.jsonObject
-                    val mediaType = item["media_type"]?.jsonPrimitive?.content?.toIntOrNull() ?: 1
-                    val isVideo = mediaType == 2
-                    val isCarousel = mediaType == 8
-
-                    val mediaUrls = mutableListOf<String>()
-
-                    if (isCarousel) {
-                        val carouselMedia = item["carousel_media"]?.jsonArray
-                        carouselMedia?.forEach { carouselItem ->
-                            val ci = carouselItem.jsonObject
-                            val ciType = ci["media_type"]?.jsonPrimitive?.content?.toIntOrNull() ?: 1
-                            val ciIsVideo = ciType == 2
-
-                            val url = if (ciIsVideo) {
-                                ci["video_versions"]?.jsonArray
-                                    ?.firstOrNull()?.jsonObject
-                                    ?.get("url")?.jsonPrimitive?.content ?: ""
-                            } else {
-                                ci["image_versions2"]?.jsonObject
-                                    ?.get("candidates")?.jsonArray
-                                    ?.firstOrNull()?.jsonObject
-                                    ?.get("url")?.jsonPrimitive?.content ?: ""
-                            }
-                            if (url.isNotEmpty()) mediaUrls.add(url)
-                        }
-                    } else {
-                        val url = if (isVideo) {
-                            item["video_versions"]?.jsonArray
-                                ?.firstOrNull()?.jsonObject
-                                ?.get("url")?.jsonPrimitive?.content ?: ""
-                        } else {
-                            item["image_versions2"]?.jsonObject
-                                ?.get("candidates")?.jsonArray
-                                ?.firstOrNull()?.jsonObject
-                                ?.get("url")?.jsonPrimitive?.content ?: ""
-                        }
-                        if (url.isNotEmpty()) mediaUrls.add(url)
-                    }
-
-                    val thumbnailUrl = item["image_versions2"]?.jsonObject
-                        ?.get("candidates")?.jsonArray
-                        ?.firstOrNull()?.jsonObject
-                        ?.get("url")?.jsonPrimitive?.content ?: ""
-
-                    val captionObj = item["caption"]?.jsonObject
-                    val caption = captionObj?.get("text")?.jsonPrimitive?.content ?: ""
-
-                    val code = item["code"]?.jsonPrimitive?.content ?: ""
-
-                    allPosts.add(
-                        FeedPost(
-                            id = item["id"]?.jsonPrimitive?.content ?: item["pk"]?.jsonPrimitive?.content ?: "",
-                            shortcode = code,
-                            mediaUrls = mediaUrls,
-                            thumbnailUrl = thumbnailUrl,
-                            type = when {
-                                isVideo -> MediaType.VIDEO
-                                isCarousel -> MediaType.IMAGE
-                                else -> MediaType.IMAGE
-                            },
-                            isCarousel = isCarousel,
-                            caption = caption,
-                            timestamp = item["taken_at"]?.jsonPrimitive?.longOrNull ?: 0,
-                            likeCount = item["like_count"]?.jsonPrimitive?.longOrNull ?: 0,
-                            commentCount = item["comment_count"]?.jsonPrimitive?.longOrNull ?: 0
-                        )
-                    )
+                    allPosts.add(parseV1MediaItem(itemJson.jsonObject))
                 }
 
                 // Check for more pages
@@ -788,36 +778,9 @@ class InstagramService {
 
                 items.forEach { itemJson ->
                     val media = itemJson.jsonObject["media"]?.jsonObject ?: itemJson.jsonObject
-                    val mediaType = media["media_type"]?.jsonPrimitive?.content?.toIntOrNull() ?: 2
-
-                    val videoUrl = media["video_versions"]?.jsonArray
-                        ?.firstOrNull()?.jsonObject
-                        ?.get("url")?.jsonPrimitive?.content ?: ""
-
-                    val thumbnailUrl = media["image_versions2"]?.jsonObject
-                        ?.get("candidates")?.jsonArray
-                        ?.firstOrNull()?.jsonObject
-                        ?.get("url")?.jsonPrimitive?.content ?: ""
-
-                    val captionObj = media["caption"]?.jsonObject
-                    val caption = captionObj?.get("text")?.jsonPrimitive?.content ?: ""
-                    val code = media["code"]?.jsonPrimitive?.content ?: ""
-
-                    if (videoUrl.isNotEmpty()) {
-                        allPosts.add(
-                            FeedPost(
-                                id = media["id"]?.jsonPrimitive?.content ?: media["pk"]?.jsonPrimitive?.content ?: "",
-                                shortcode = code,
-                                mediaUrls = listOf(videoUrl),
-                                thumbnailUrl = thumbnailUrl,
-                                type = MediaType.VIDEO,
-                                isCarousel = false,
-                                caption = caption,
-                                timestamp = media["taken_at"]?.jsonPrimitive?.longOrNull ?: 0,
-                                likeCount = media["like_count"]?.jsonPrimitive?.longOrNull ?: 0,
-                                commentCount = media["comment_count"]?.jsonPrimitive?.longOrNull ?: 0
-                            )
-                        )
+                    val post = parseV1MediaItem(media)
+                    if (post.mediaUrls.isNotEmpty()) {
+                        allPosts.add(post)
                     }
                 }
 
@@ -872,70 +835,7 @@ class InstagramService {
 
                 items.forEach { itemJson ->
                     val media = itemJson.jsonObject["media"]?.jsonObject ?: itemJson.jsonObject
-                    val mediaType = media["media_type"]?.jsonPrimitive?.content?.toIntOrNull() ?: 1
-                    val isVideo = mediaType == 2
-                    val isCarousel = mediaType == 8
-
-                    val mediaUrls = mutableListOf<String>()
-
-                    if (isCarousel) {
-                        val carouselMedia = media["carousel_media"]?.jsonArray
-                        carouselMedia?.forEach { carouselItem ->
-                            val ci = carouselItem.jsonObject
-                            val ciType = ci["media_type"]?.jsonPrimitive?.content?.toIntOrNull() ?: 1
-                            val ciIsVideo = ciType == 2
-                            val url = if (ciIsVideo) {
-                                ci["video_versions"]?.jsonArray
-                                    ?.firstOrNull()?.jsonObject
-                                    ?.get("url")?.jsonPrimitive?.content ?: ""
-                            } else {
-                                ci["image_versions2"]?.jsonObject
-                                    ?.get("candidates")?.jsonArray
-                                    ?.firstOrNull()?.jsonObject
-                                    ?.get("url")?.jsonPrimitive?.content ?: ""
-                            }
-                            if (url.isNotEmpty()) mediaUrls.add(url)
-                        }
-                    } else {
-                        val url = if (isVideo) {
-                            media["video_versions"]?.jsonArray
-                                ?.firstOrNull()?.jsonObject
-                                ?.get("url")?.jsonPrimitive?.content ?: ""
-                        } else {
-                            media["image_versions2"]?.jsonObject
-                                ?.get("candidates")?.jsonArray
-                                ?.firstOrNull()?.jsonObject
-                                ?.get("url")?.jsonPrimitive?.content ?: ""
-                        }
-                        if (url.isNotEmpty()) mediaUrls.add(url)
-                    }
-
-                    val thumbnailUrl = media["image_versions2"]?.jsonObject
-                        ?.get("candidates")?.jsonArray
-                        ?.firstOrNull()?.jsonObject
-                        ?.get("url")?.jsonPrimitive?.content ?: ""
-
-                    val captionObj = media["caption"]?.jsonObject
-                    val caption = captionObj?.get("text")?.jsonPrimitive?.content ?: ""
-                    val code = media["code"]?.jsonPrimitive?.content ?: ""
-
-                    allPosts.add(
-                        FeedPost(
-                            id = media["id"]?.jsonPrimitive?.content ?: media["pk"]?.jsonPrimitive?.content ?: "",
-                            shortcode = code,
-                            mediaUrls = mediaUrls,
-                            thumbnailUrl = thumbnailUrl,
-                            type = when {
-                                isVideo -> MediaType.VIDEO
-                                else -> MediaType.IMAGE
-                            },
-                            isCarousel = isCarousel,
-                            caption = caption,
-                            timestamp = media["taken_at"]?.jsonPrimitive?.longOrNull ?: 0,
-                            likeCount = media["like_count"]?.jsonPrimitive?.longOrNull ?: 0,
-                            commentCount = media["comment_count"]?.jsonPrimitive?.longOrNull ?: 0
-                        )
-                    )
+                    allPosts.add(parseV1MediaItem(media))
                 }
 
                 hasMore = jsonResponse["more_available"]?.jsonPrimitive?.content?.toBooleanStrictOrNull() ?: false
@@ -986,71 +886,7 @@ class InstagramService {
                 if (items.isNullOrEmpty()) break
 
                 items.forEach { itemJson ->
-                    val item = itemJson.jsonObject
-                    val mediaType = item["media_type"]?.jsonPrimitive?.content?.toIntOrNull() ?: 1
-                    val isVideo = mediaType == 2
-                    val isCarousel = mediaType == 8
-
-                    val mediaUrls = mutableListOf<String>()
-
-                    if (isCarousel) {
-                        val carouselMedia = item["carousel_media"]?.jsonArray
-                        carouselMedia?.forEach { carouselItem ->
-                            val ci = carouselItem.jsonObject
-                            val ciType = ci["media_type"]?.jsonPrimitive?.content?.toIntOrNull() ?: 1
-                            val ciIsVideo = ciType == 2
-                            val url = if (ciIsVideo) {
-                                ci["video_versions"]?.jsonArray
-                                    ?.firstOrNull()?.jsonObject
-                                    ?.get("url")?.jsonPrimitive?.content ?: ""
-                            } else {
-                                ci["image_versions2"]?.jsonObject
-                                    ?.get("candidates")?.jsonArray
-                                    ?.firstOrNull()?.jsonObject
-                                    ?.get("url")?.jsonPrimitive?.content ?: ""
-                            }
-                            if (url.isNotEmpty()) mediaUrls.add(url)
-                        }
-                    } else {
-                        val url = if (isVideo) {
-                            item["video_versions"]?.jsonArray
-                                ?.firstOrNull()?.jsonObject
-                                ?.get("url")?.jsonPrimitive?.content ?: ""
-                        } else {
-                            item["image_versions2"]?.jsonObject
-                                ?.get("candidates")?.jsonArray
-                                ?.firstOrNull()?.jsonObject
-                                ?.get("url")?.jsonPrimitive?.content ?: ""
-                        }
-                        if (url.isNotEmpty()) mediaUrls.add(url)
-                    }
-
-                    val thumbnailUrl = item["image_versions2"]?.jsonObject
-                        ?.get("candidates")?.jsonArray
-                        ?.firstOrNull()?.jsonObject
-                        ?.get("url")?.jsonPrimitive?.content ?: ""
-
-                    val captionObj = item["caption"]?.jsonObject
-                    val caption = captionObj?.get("text")?.jsonPrimitive?.content ?: ""
-                    val code = item["code"]?.jsonPrimitive?.content ?: ""
-
-                    allPosts.add(
-                        FeedPost(
-                            id = item["id"]?.jsonPrimitive?.content ?: item["pk"]?.jsonPrimitive?.content ?: "",
-                            shortcode = code,
-                            mediaUrls = mediaUrls,
-                            thumbnailUrl = thumbnailUrl,
-                            type = when {
-                                isVideo -> MediaType.VIDEO
-                                else -> MediaType.IMAGE
-                            },
-                            isCarousel = isCarousel,
-                            caption = caption,
-                            timestamp = item["taken_at"]?.jsonPrimitive?.longOrNull ?: 0,
-                            likeCount = item["like_count"]?.jsonPrimitive?.longOrNull ?: 0,
-                            commentCount = item["comment_count"]?.jsonPrimitive?.longOrNull ?: 0
-                        )
-                    )
+                    allPosts.add(parseV1MediaItem(itemJson.jsonObject))
                 }
 
                 hasMore = jsonResponse["more_available"]?.jsonPrimitive?.content?.toBooleanStrictOrNull() ?: false
@@ -1107,70 +943,8 @@ class InstagramService {
             val item = items?.firstOrNull()?.jsonObject
                 ?: return@withContext DownloadResult.Error("Post nicht gefunden")
 
-            val mediaType = item["media_type"]?.jsonPrimitive?.content?.toIntOrNull() ?: 1
-            val isVideo = mediaType == 2
-            val isCarousel = mediaType == 8
-
-            val mediaUrls = mutableListOf<String>()
-
-            if (isCarousel) {
-                val carouselMedia = item["carousel_media"]?.jsonArray
-                carouselMedia?.forEach { carouselItem ->
-                    val ci = carouselItem.jsonObject
-                    val ciType = ci["media_type"]?.jsonPrimitive?.content?.toIntOrNull() ?: 1
-                    val ciIsVideo = ciType == 2
-                    val url = if (ciIsVideo) {
-                        ci["video_versions"]?.jsonArray
-                            ?.firstOrNull()?.jsonObject
-                            ?.get("url")?.jsonPrimitive?.content ?: ""
-                    } else {
-                        ci["image_versions2"]?.jsonObject
-                            ?.get("candidates")?.jsonArray
-                            ?.firstOrNull()?.jsonObject
-                            ?.get("url")?.jsonPrimitive?.content ?: ""
-                    }
-                    if (url.isNotEmpty()) mediaUrls.add(url)
-                }
-            } else {
-                val url = if (isVideo) {
-                    item["video_versions"]?.jsonArray
-                        ?.firstOrNull()?.jsonObject
-                        ?.get("url")?.jsonPrimitive?.content ?: ""
-                } else {
-                    item["image_versions2"]?.jsonObject
-                        ?.get("candidates")?.jsonArray
-                        ?.firstOrNull()?.jsonObject
-                        ?.get("url")?.jsonPrimitive?.content ?: ""
-                }
-                if (url.isNotEmpty()) mediaUrls.add(url)
-            }
-
-            val thumbnailUrl = item["image_versions2"]?.jsonObject
-                ?.get("candidates")?.jsonArray
-                ?.firstOrNull()?.jsonObject
-                ?.get("url")?.jsonPrimitive?.content ?: ""
-
-            val captionObj = item["caption"]?.jsonObject
-            val caption = captionObj?.get("text")?.jsonPrimitive?.content ?: ""
-
-            DownloadResult.Success(
-                FeedPost(
-                    id = item["id"]?.jsonPrimitive?.content ?: item["pk"]?.jsonPrimitive?.content ?: "",
-                    shortcode = shortcode,
-                    mediaUrls = mediaUrls,
-                    thumbnailUrl = thumbnailUrl,
-                    type = when {
-                        isVideo -> MediaType.VIDEO
-                        isCarousel -> MediaType.IMAGE
-                        else -> MediaType.IMAGE
-                    },
-                    isCarousel = isCarousel,
-                    caption = caption,
-                    timestamp = item["taken_at"]?.jsonPrimitive?.longOrNull ?: 0,
-                    likeCount = item["like_count"]?.jsonPrimitive?.longOrNull ?: 0,
-                    commentCount = item["comment_count"]?.jsonPrimitive?.longOrNull ?: 0
-                )
-            )
+            val post = parseV1MediaItem(item).copy(shortcode = shortcode)
+            DownloadResult.Success(post)
         } catch (e: Exception) {
             DownloadResult.Error("Fehler beim Laden des Posts: ${e.message}")
         }

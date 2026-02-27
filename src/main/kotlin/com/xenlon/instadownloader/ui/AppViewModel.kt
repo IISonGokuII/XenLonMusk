@@ -1,5 +1,6 @@
 package com.xenlon.instadownloader.ui
 
+import android.content.ClipboardManager
 import android.content.ContentValues
 import android.content.Context
 import android.content.SharedPreferences
@@ -104,8 +105,19 @@ class AppViewModel(private val appContext: Context) {
     // Download progress
     val downloadProgress: StateFlow<DownloadProgress> = downloadManager.downloadProgress
 
+    // Quality selection
+    private val _downloadQuality = MutableStateFlow(DownloadQuality.HD)
+    val downloadQuality: StateFlow<DownloadQuality> = _downloadQuality.asStateFlow()
+
+    // Clipboard monitoring
+    private val _clipboardUrl = MutableStateFlow<String?>(null)
+    val clipboardUrl: StateFlow<String?> = _clipboardUrl.asStateFlow()
+    private var clipboardListener: ClipboardManager.OnPrimaryClipChangedListener? = null
+
     init {
         loadSearchHistory()
+        loadQualityPreference()
+        startClipboardMonitoring()
     }
 
     // --- Login ---
@@ -349,6 +361,65 @@ class AppViewModel(private val appContext: Context) {
         }
     }
 
+    // --- Quality Selection ---
+
+    fun toggleQuality() {
+        val newQuality = if (_downloadQuality.value == DownloadQuality.HD) DownloadQuality.SD else DownloadQuality.HD
+        _downloadQuality.value = newQuality
+        instagramService.preferHD = newQuality == DownloadQuality.HD
+        prefs.edit().putString("download_quality", newQuality.name).apply()
+    }
+
+    private fun loadQualityPreference() {
+        val saved = prefs.getString("download_quality", "HD") ?: "HD"
+        val quality = try { DownloadQuality.valueOf(saved) } catch (_: Exception) { DownloadQuality.HD }
+        _downloadQuality.value = quality
+        instagramService.preferHD = quality == DownloadQuality.HD
+    }
+
+    // --- Clipboard Monitoring ---
+
+    private fun startClipboardMonitoring() {
+        val clipboard = appContext.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager ?: return
+        clipboardListener = ClipboardManager.OnPrimaryClipChangedListener {
+            val clip = clipboard.primaryClip
+            if (clip != null && clip.itemCount > 0) {
+                val text = clip.getItemAt(0).text?.toString() ?: return@OnPrimaryClipChangedListener
+                if (text.contains("instagram.com/")) {
+                    _clipboardUrl.value = text
+                }
+            }
+        }
+        clipboard.addPrimaryClipChangedListener(clipboardListener)
+    }
+
+    fun handleClipboardUrl() {
+        val url = _clipboardUrl.value ?: return
+        _clipboardUrl.value = null
+        handleShareIntent(url)
+    }
+
+    fun dismissClipboardUrl() {
+        _clipboardUrl.value = null
+    }
+
+    // --- Batch Gallery Operations ---
+
+    fun saveMultipleToGallery(context: Context, items: List<GalleryItem>) {
+        items.forEach { saveToSystemGallery(context, it) }
+    }
+
+    fun deleteMultipleItems(items: List<GalleryItem>) {
+        scope.launch(Dispatchers.IO) {
+            items.forEach { item ->
+                if (item.file.exists()) item.file.delete()
+            }
+            _galleryItems.value = _galleryItems.value.filter { existing ->
+                items.none { it.file.absolutePath == existing.file.absolutePath }
+            }
+        }
+    }
+
     // --- Gallery ---
 
     fun openGallery() {
@@ -580,6 +651,8 @@ class AppViewModel(private val appContext: Context) {
     fun getDownloadDir(): String = downloadManager.getDownloadDir()
 
     fun dispose() {
+        val clipboard = appContext.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
+        clipboardListener?.let { clipboard?.removePrimaryClipChangedListener(it) }
         scope.cancel()
         downloadManager.close()
     }

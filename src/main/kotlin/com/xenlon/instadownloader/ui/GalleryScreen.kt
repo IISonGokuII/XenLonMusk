@@ -3,10 +3,13 @@ package com.xenlon.instadownloader.ui
 import android.net.Uri
 import androidx.compose.animation.*
 import androidx.compose.foundation.*
+import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -18,6 +21,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
@@ -42,18 +47,26 @@ private data class UserFolder(
     val previewItem: GalleryItem
 )
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
 fun GalleryScreen(
     galleryItems: List<GalleryItem>,
     onBack: () -> Unit,
     onRefresh: () -> Unit,
     onSaveToGallery: (GalleryItem) -> Unit,
-    onDeleteItem: (GalleryItem) -> Unit
+    onDeleteItem: (GalleryItem) -> Unit,
+    onSaveMultiple: (List<GalleryItem>) -> Unit = {},
+    onDeleteMultiple: (List<GalleryItem>) -> Unit = {}
 ) {
     var selectedUser by remember { mutableStateOf<String?>(null) }
-    var selectedItem by remember { mutableStateOf<GalleryItem?>(null) }
+    var viewerStartIndex by remember { mutableIntStateOf(-1) }
+    var viewerItems by remember { mutableStateOf<List<GalleryItem>>(emptyList()) }
     var showDeleteConfirm by remember { mutableStateOf<GalleryItem?>(null) }
+
+    // Multi-select state
+    var isMultiSelectMode by remember { mutableStateOf(false) }
+    var selectedItems by remember { mutableStateOf<Set<String>>(emptySet()) }
+    var showBatchDeleteConfirm by remember { mutableStateOf(false) }
 
     // Group items by username into folders
     val userFolders = remember(galleryItems) {
@@ -69,22 +82,25 @@ fun GalleryScreen(
             .sortedByDescending { it.items.maxOfOrNull { item -> item.lastModified } ?: 0L }
     }
 
-    // Full-screen viewer
-    if (selectedItem != null) {
-        GalleryViewer(
-            item = selectedItem!!,
-            onDismiss = { selectedItem = null },
-            onSaveToGallery = { onSaveToGallery(it) },
+    // Full-screen pager viewer
+    if (viewerStartIndex >= 0 && viewerItems.isNotEmpty()) {
+        GalleryPagerViewer(
+            items = viewerItems,
+            startIndex = viewerStartIndex,
+            onDismiss = { viewerStartIndex = -1; viewerItems = emptyList() },
+            onSaveToGallery = onSaveToGallery,
             onDelete = { showDeleteConfirm = it }
         )
 
-        // Delete confirmation dialog
         if (showDeleteConfirm != null) {
             DeleteConfirmDialog(
                 onConfirm = {
                     onDeleteItem(showDeleteConfirm!!)
-                    selectedItem = null
                     showDeleteConfirm = null
+                    if (viewerItems.size <= 1) {
+                        viewerStartIndex = -1
+                        viewerItems = emptyList()
+                    }
                 },
                 onDismiss = { showDeleteConfirm = null }
             )
@@ -98,15 +114,44 @@ fun GalleryScreen(
         if (folder != null) {
             UserFolderScreen(
                 folder = folder,
-                onBack = { selectedUser = null },
-                onItemClick = { selectedItem = it },
+                isMultiSelectMode = isMultiSelectMode,
+                selectedItems = selectedItems,
+                onBack = {
+                    selectedUser = null
+                    isMultiSelectMode = false
+                    selectedItems = emptySet()
+                },
+                onItemClick = { item ->
+                    if (isMultiSelectMode) {
+                        selectedItems = if (selectedItems.contains(item.file.absolutePath)) {
+                            selectedItems - item.file.absolutePath
+                        } else {
+                            selectedItems + item.file.absolutePath
+                        }
+                    } else {
+                        val idx = folder.items.indexOf(item)
+                        viewerItems = folder.items
+                        viewerStartIndex = if (idx >= 0) idx else 0
+                    }
+                },
+                onToggleMultiSelect = {
+                    isMultiSelectMode = !isMultiSelectMode
+                    if (!isMultiSelectMode) selectedItems = emptySet()
+                },
+                onSelectAll = {
+                    selectedItems = folder.items.map { it.file.absolutePath }.toSet()
+                },
+                onSaveSelected = {
+                    val items = folder.items.filter { selectedItems.contains(it.file.absolutePath) }
+                    onSaveMultiple(items)
+                    isMultiSelectMode = false
+                    selectedItems = emptySet()
+                },
+                onDeleteSelected = { showBatchDeleteConfirm = true },
                 onSaveToGallery = onSaveToGallery,
-                onDeleteItem = { item ->
-                    showDeleteConfirm = item
-                }
+                onDeleteItem = { item -> showDeleteConfirm = item }
             )
 
-            // Delete confirmation dialog
             if (showDeleteConfirm != null) {
                 DeleteConfirmDialog(
                     onConfirm = {
@@ -114,6 +159,37 @@ fun GalleryScreen(
                         showDeleteConfirm = null
                     },
                     onDismiss = { showDeleteConfirm = null }
+                )
+            }
+
+            if (showBatchDeleteConfirm) {
+                AlertDialog(
+                    onDismissRequest = { showBatchDeleteConfirm = false },
+                    title = { Text("${selectedItems.size} Dateien löschen?", color = TextPrimary) },
+                    text = {
+                        Text(
+                            "Möchtest du ${selectedItems.size} Dateien unwiderruflich löschen?",
+                            color = TextSecondary
+                        )
+                    },
+                    confirmButton = {
+                        TextButton(onClick = {
+                            val items = folder.items.filter { selectedItems.contains(it.file.absolutePath) }
+                            onDeleteMultiple(items)
+                            showBatchDeleteConfirm = false
+                            isMultiSelectMode = false
+                            selectedItems = emptySet()
+                        }) {
+                            Text("Löschen", color = ErrorRed)
+                        }
+                    },
+                    dismissButton = {
+                        TextButton(onClick = { showBatchDeleteConfirm = false }) {
+                            Text("Abbrechen", color = TextSecondary)
+                        }
+                    },
+                    containerColor = DarkSurface,
+                    shape = RoundedCornerShape(20.dp)
                 )
             }
             return
@@ -174,7 +250,6 @@ fun GalleryScreen(
         )
 
         if (userFolders.isEmpty()) {
-            // Empty state
             Box(
                 modifier = Modifier.fillMaxSize(),
                 contentAlignment = Alignment.Center
@@ -211,7 +286,6 @@ fun GalleryScreen(
                 }
             }
         } else {
-            // User folder grid
             LazyVerticalGrid(
                 columns = GridCells.Fixed(2),
                 modifier = Modifier
@@ -249,7 +323,6 @@ private fun UserFolderCard(
         elevation = CardDefaults.cardElevation(defaultElevation = 4.dp)
     ) {
         Column {
-            // Preview image
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -267,7 +340,6 @@ private fun UserFolderCard(
                     contentScale = ContentScale.Crop
                 )
 
-                // Item count badge
                 Box(
                     modifier = Modifier
                         .align(Alignment.TopEnd)
@@ -284,7 +356,6 @@ private fun UserFolderCard(
                     )
                 }
 
-                // Video indicator if preview is video
                 if (folder.previewItem.isVideo) {
                     Box(
                         modifier = Modifier
@@ -304,7 +375,6 @@ private fun UserFolderCard(
                 }
             }
 
-            // Username label
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -322,7 +392,6 @@ private fun UserFolderCard(
 
                 val videoCount = folder.items.count { it.isVideo }
                 val imageCount = folder.items.size - videoCount
-                val categories = folder.items.map { it.category }.distinct()
 
                 Text(
                     buildString {
@@ -338,12 +407,18 @@ private fun UserFolderCard(
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
 private fun UserFolderScreen(
     folder: UserFolder,
+    isMultiSelectMode: Boolean,
+    selectedItems: Set<String>,
     onBack: () -> Unit,
     onItemClick: (GalleryItem) -> Unit,
+    onToggleMultiSelect: () -> Unit,
+    onSelectAll: () -> Unit,
+    onSaveSelected: () -> Unit,
+    onDeleteSelected: () -> Unit,
     onSaveToGallery: (GalleryItem) -> Unit,
     onDeleteItem: (GalleryItem) -> Unit
 ) {
@@ -365,22 +440,50 @@ private fun UserFolderScreen(
     ) {
         TopAppBar(
             title = {
-                Column {
+                if (isMultiSelectMode) {
                     Text(
-                        "@${folder.username}",
+                        "${selectedItems.size} ausgewählt",
                         fontWeight = FontWeight.Bold,
                         fontSize = 18.sp
                     )
-                    Text(
-                        "${folder.items.size} Dateien",
-                        fontSize = 12.sp,
-                        color = TextSecondary
-                    )
+                } else {
+                    Column {
+                        Text(
+                            "@${folder.username}",
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 18.sp
+                        )
+                        Text(
+                            "${folder.items.size} Dateien",
+                            fontSize = 12.sp,
+                            color = TextSecondary
+                        )
+                    }
                 }
             },
             navigationIcon = {
                 IconButton(onClick = onBack) {
                     Icon(Icons.Default.ArrowBack, "Zurück", tint = TextPrimary)
+                }
+            },
+            actions = {
+                if (isMultiSelectMode) {
+                    IconButton(onClick = onSelectAll) {
+                        Icon(Icons.Default.SelectAll, "Alle auswählen", tint = TextSecondary)
+                    }
+                    IconButton(onClick = onSaveSelected, enabled = selectedItems.isNotEmpty()) {
+                        Icon(Icons.Default.SaveAlt, "Speichern", tint = SuccessGreen)
+                    }
+                    IconButton(onClick = onDeleteSelected, enabled = selectedItems.isNotEmpty()) {
+                        Icon(Icons.Default.Delete, "Löschen", tint = ErrorRed)
+                    }
+                }
+                IconButton(onClick = onToggleMultiSelect) {
+                    Icon(
+                        if (isMultiSelectMode) Icons.Default.Close else Icons.Default.ChecklistRtl,
+                        "Mehrfachauswahl",
+                        tint = if (isMultiSelectMode) AccentPink else TextSecondary
+                    )
                 }
             },
             colors = TopAppBarDefaults.topAppBarColors(
@@ -433,17 +536,27 @@ private fun UserFolderScreen(
             items(filteredItems, key = { it.file.absolutePath }) { item ->
                 GalleryThumbnail(
                     item = item,
-                    onClick = { onItemClick(item) }
+                    isSelected = selectedItems.contains(item.file.absolutePath),
+                    isMultiSelectMode = isMultiSelectMode,
+                    onClick = { onItemClick(item) },
+                    onLongClick = {
+                        if (!isMultiSelectMode) onToggleMultiSelect()
+                        onItemClick(item)
+                    }
                 )
             }
         }
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun GalleryThumbnail(
     item: GalleryItem,
-    onClick: () -> Unit
+    isSelected: Boolean = false,
+    isMultiSelectMode: Boolean = false,
+    onClick: () -> Unit,
+    onLongClick: () -> Unit = {}
 ) {
     val context = LocalContext.current
 
@@ -452,7 +565,14 @@ private fun GalleryThumbnail(
             .aspectRatio(1f)
             .clip(RoundedCornerShape(8.dp))
             .background(DarkSurfaceVariant)
-            .clickable(onClick = onClick)
+            .combinedClickable(
+                onClick = onClick,
+                onLongClick = onLongClick
+            )
+            .then(
+                if (isSelected) Modifier.border(3.dp, AccentPink, RoundedCornerShape(8.dp))
+                else Modifier
+            )
     ) {
         AsyncImage(
             model = ImageRequest.Builder(context)
@@ -484,6 +604,29 @@ private fun GalleryThumbnail(
             }
         }
 
+        // Selection checkbox
+        if (isMultiSelectMode) {
+            Box(
+                modifier = Modifier
+                    .align(Alignment.TopStart)
+                    .padding(6.dp)
+                    .size(24.dp)
+                    .clip(CircleShape)
+                    .background(if (isSelected) AccentPink else Color.Black.copy(alpha = 0.5f))
+                    .border(2.dp, Color.White, CircleShape),
+                contentAlignment = Alignment.Center
+            ) {
+                if (isSelected) {
+                    Icon(
+                        Icons.Default.Check,
+                        contentDescription = null,
+                        tint = Color.White,
+                        modifier = Modifier.size(16.dp)
+                    )
+                }
+            }
+        }
+
         // Category badge
         Box(
             modifier = Modifier
@@ -504,16 +647,27 @@ private fun GalleryThumbnail(
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
+/**
+ * Full-screen viewer with horizontal pager (swipe between images) and pinch-to-zoom.
+ */
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
-private fun GalleryViewer(
-    item: GalleryItem,
+private fun GalleryPagerViewer(
+    items: List<GalleryItem>,
+    startIndex: Int,
     onDismiss: () -> Unit,
     onSaveToGallery: (GalleryItem) -> Unit,
     onDelete: (GalleryItem) -> Unit
 ) {
-    val context = LocalContext.current
+    val pagerState = rememberPagerState(initialPage = startIndex) { items.size }
+    val currentItem = items.getOrNull(pagerState.currentPage) ?: return
+
     var saved by remember { mutableStateOf(false) }
+
+    // Reset saved state when page changes
+    LaunchedEffect(pagerState.currentPage) {
+        saved = false
+    }
 
     Column(
         modifier = Modifier
@@ -525,13 +679,13 @@ private fun GalleryViewer(
             title = {
                 Column {
                     Text(
-                        item.name,
+                        currentItem.name,
                         fontSize = 14.sp,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
                     )
                     Text(
-                        "${getCategoryLabel(item.category)} · ${formatFileSize(item.sizeBytes)}",
+                        "${getCategoryLabel(currentItem.category)} · ${formatFileSize(currentItem.sizeBytes)} · ${pagerState.currentPage + 1}/${items.size}",
                         fontSize = 12.sp,
                         color = TextSecondary
                     )
@@ -548,30 +702,29 @@ private fun GalleryViewer(
             )
         )
 
-        // Content
-        Box(
+        // Swipeable pager content
+        HorizontalPager(
+            state = pagerState,
             modifier = Modifier
                 .weight(1f)
-                .fillMaxWidth(),
-            contentAlignment = Alignment.Center
-        ) {
-            if (item.isVideo) {
-                // Video player with ExoPlayer
-                VideoPlayer(
-                    file = item.file,
-                    modifier = Modifier.fillMaxSize()
-                )
-            } else {
-                // Image viewer
-                AsyncImage(
-                    model = ImageRequest.Builder(context)
-                        .data(item.file)
-                        .crossfade(true)
-                        .build(),
-                    contentDescription = item.name,
-                    modifier = Modifier.fillMaxSize(),
-                    contentScale = ContentScale.Fit
-                )
+                .fillMaxWidth()
+        ) { page ->
+            val item = items[page]
+            Box(
+                modifier = Modifier.fillMaxSize(),
+                contentAlignment = Alignment.Center
+            ) {
+                if (item.isVideo) {
+                    VideoPlayer(
+                        file = item.file,
+                        modifier = Modifier.fillMaxSize()
+                    )
+                } else {
+                    ZoomableImage(
+                        item = item,
+                        modifier = Modifier.fillMaxSize()
+                    )
+                }
             }
         }
 
@@ -583,12 +736,11 @@ private fun GalleryViewer(
                 .padding(16.dp),
             horizontalArrangement = Arrangement.SpaceEvenly
         ) {
-            // Save to gallery button
             Column(
                 horizontalAlignment = Alignment.CenterHorizontally,
                 modifier = Modifier.clickable {
                     if (!saved) {
-                        onSaveToGallery(item)
+                        onSaveToGallery(currentItem)
                         saved = true
                     }
                 }
@@ -607,10 +759,9 @@ private fun GalleryViewer(
                 )
             }
 
-            // Delete button
             Column(
                 horizontalAlignment = Alignment.CenterHorizontally,
-                modifier = Modifier.clickable { onDelete(item) }
+                modifier = Modifier.clickable { onDelete(currentItem) }
             ) {
                 Icon(
                     Icons.Default.Delete,
@@ -626,6 +777,59 @@ private fun GalleryViewer(
                 )
             }
         }
+    }
+}
+
+/**
+ * Zoomable image with pinch-to-zoom and pan gestures.
+ */
+@Composable
+private fun ZoomableImage(
+    item: GalleryItem,
+    modifier: Modifier = Modifier
+) {
+    val context = LocalContext.current
+    var scale by remember { mutableFloatStateOf(1f) }
+    var offsetX by remember { mutableFloatStateOf(0f) }
+    var offsetY by remember { mutableFloatStateOf(0f) }
+
+    Box(
+        modifier = modifier
+            .pointerInput(Unit) {
+                detectTransformGestures { _, pan, zoom, _ ->
+                    scale = (scale * zoom).coerceIn(1f, 5f)
+                    if (scale > 1f) {
+                        offsetX += pan.x
+                        offsetY += pan.y
+                        // Constrain panning
+                        val maxX = (scale - 1f) * size.width / 2f
+                        val maxY = (scale - 1f) * size.height / 2f
+                        offsetX = offsetX.coerceIn(-maxX, maxX)
+                        offsetY = offsetY.coerceIn(-maxY, maxY)
+                    } else {
+                        offsetX = 0f
+                        offsetY = 0f
+                    }
+                }
+            },
+        contentAlignment = Alignment.Center
+    ) {
+        AsyncImage(
+            model = ImageRequest.Builder(context)
+                .data(item.file)
+                .crossfade(true)
+                .build(),
+            contentDescription = item.name,
+            modifier = Modifier
+                .fillMaxSize()
+                .graphicsLayer(
+                    scaleX = scale,
+                    scaleY = scale,
+                    translationX = offsetX,
+                    translationY = offsetY
+                ),
+            contentScale = ContentScale.Fit
+        )
     }
 }
 

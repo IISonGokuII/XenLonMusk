@@ -45,6 +45,8 @@ fun MainScreen(
     isAnonymousMode: Boolean = false,
     isOwnProfile: Boolean = false,
     searchHistory: List<SearchHistoryEntry> = emptyList(),
+    downloadQuality: DownloadQuality = DownloadQuality.HD,
+    clipboardUrl: String? = null,
     onSearchUser: (String) -> Unit,
     onDownloadProfilePic: () -> Unit,
     onDownloadStories: () -> Unit,
@@ -59,6 +61,9 @@ fun MainScreen(
     onDismissSharedPost: () -> Unit,
     onToggleFavorite: (SearchHistoryEntry) -> Unit,
     onRemoveFromHistory: (SearchHistoryEntry) -> Unit,
+    onToggleQuality: () -> Unit = {},
+    onHandleClipboardUrl: () -> Unit = {},
+    onDismissClipboardUrl: () -> Unit = {},
     onLogout: () -> Unit,
     onOpenGallery: () -> Unit
 ) {
@@ -150,6 +155,39 @@ fun MainScreen(
                 }
             }
 
+            // Clipboard link banner
+            if (clipboardUrl != null) {
+                Card(
+                    shape = RoundedCornerShape(14.dp),
+                    colors = CardDefaults.cardColors(containerColor = Color(0xFF1A2A3D))
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(14.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        Icon(
+                            Icons.Default.ContentPaste,
+                            contentDescription = null,
+                            tint = AccentPurple,
+                            modifier = Modifier.size(20.dp)
+                        )
+                        Text(
+                            "Instagram-Link in Zwischenablage erkannt",
+                            color = TextSecondary,
+                            fontSize = 13.sp,
+                            modifier = Modifier.weight(1f)
+                        )
+                        TextButton(onClick = onHandleClipboardUrl) {
+                            Text("Öffnen", color = AccentPink, fontWeight = FontWeight.Bold)
+                        }
+                        IconButton(onClick = onDismissClipboardUrl, modifier = Modifier.size(24.dp)) {
+                            Icon(Icons.Default.Close, contentDescription = null, tint = TextSecondary, modifier = Modifier.size(16.dp))
+                        }
+                    }
+                }
+            }
+
             // Shared post banner (from Intent)
             if (sharedPost != null) {
                 SharedPostBanner(
@@ -157,6 +195,51 @@ fun MainScreen(
                     onDownload = onDownloadSharedPost,
                     onDismiss = onDismissSharedPost
                 )
+            }
+
+            // Quality toggle
+            Card(
+                shape = RoundedCornerShape(14.dp),
+                colors = CardDefaults.cardColors(containerColor = DarkSurface)
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { onToggleQuality() }
+                        .padding(horizontal = 16.dp, vertical = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(
+                            Icons.Default.HighQuality,
+                            contentDescription = null,
+                            tint = if (downloadQuality == DownloadQuality.HD) SuccessGreen else WarningOrange,
+                            modifier = Modifier.size(20.dp)
+                        )
+                        Spacer(modifier = Modifier.width(10.dp))
+                        Text(
+                            "Download-Qualität",
+                            color = TextPrimary,
+                            fontSize = 14.sp
+                        )
+                    }
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            downloadQuality.label,
+                            color = if (downloadQuality == DownloadQuality.HD) SuccessGreen else WarningOrange,
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Icon(
+                            Icons.Default.SwapHoriz,
+                            contentDescription = null,
+                            tint = TextSecondary,
+                            modifier = Modifier.size(18.dp)
+                        )
+                    }
+                }
             }
 
             // Search bar
@@ -755,6 +838,7 @@ private fun StoriesSection(
                 if (items.isEmpty()) {
                     EmptyMessage("Keine aktiven Stories vorhanden")
                 } else {
+                    val context = LocalContext.current
                     Column {
                         Row(
                             modifier = Modifier.fillMaxWidth(),
@@ -773,6 +857,61 @@ private fun StoriesSection(
                                 color = TextSecondary,
                                 fontSize = 12.sp
                             )
+                        }
+
+                        Spacer(modifier = Modifier.height(10.dp))
+
+                        // Story thumbnail preview row
+                        LazyRow(
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            items(items) { story ->
+                                Box(
+                                    modifier = Modifier
+                                        .size(72.dp)
+                                        .clip(RoundedCornerShape(12.dp))
+                                        .background(DarkSurfaceVariant)
+                                        .border(
+                                            2.dp,
+                                            Brush.linearGradient(
+                                                colors = listOf(InstagramPink, InstagramOrange, InstagramYellow)
+                                            ),
+                                            RoundedCornerShape(12.dp)
+                                        )
+                                ) {
+                                    val thumbUrl = story.thumbnailUrl.ifEmpty { story.mediaUrl }
+                                    AsyncImage(
+                                        model = ImageRequest.Builder(context)
+                                            .data(thumbUrl)
+                                            .crossfade(true)
+                                            .build(),
+                                        contentDescription = "Story",
+                                        modifier = Modifier
+                                            .fillMaxSize()
+                                            .padding(2.dp)
+                                            .clip(RoundedCornerShape(10.dp)),
+                                        contentScale = ContentScale.Crop
+                                    )
+                                    if (story.type == MediaType.VIDEO) {
+                                        Box(
+                                            modifier = Modifier
+                                                .align(Alignment.BottomEnd)
+                                                .padding(4.dp)
+                                                .size(16.dp)
+                                                .clip(CircleShape)
+                                                .background(Color.Black.copy(alpha = 0.7f)),
+                                            contentAlignment = Alignment.Center
+                                        ) {
+                                            Icon(
+                                                Icons.Default.PlayArrow,
+                                                contentDescription = null,
+                                                tint = Color.White,
+                                                modifier = Modifier.size(12.dp)
+                                            )
+                                        }
+                                    }
+                                }
+                            }
                         }
 
                         Spacer(modifier = Modifier.height(12.dp))
