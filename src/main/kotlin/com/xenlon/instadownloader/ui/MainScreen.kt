@@ -932,6 +932,7 @@ private fun StoriesSection(
                     }
                 }
             }
+            else -> {}
         }
     }
 }
@@ -999,6 +1000,7 @@ private fun HighlightsSection(
                     }
                 }
             }
+            else -> {}
         }
     }
 }
@@ -1114,6 +1116,7 @@ private fun ReelsSection(
                     }
                 }
             }
+            else -> {}
         }
     }
 }
@@ -1169,6 +1172,7 @@ private fun TaggedPostsSection(
                     }
                 }
             }
+            else -> {}
         }
     }
 }
@@ -1244,6 +1248,7 @@ private fun SavedPostsSection(
                     }
                 }
             }
+            else -> {}
         }
     }
 }
@@ -1503,6 +1508,7 @@ private fun FeedPostsSection(
                     }
                 }
             }
+            else -> {}
         }
     }
 }
@@ -1557,6 +1563,7 @@ private fun ArchivedPostsSection(
                     }
                 }
             }
+            else -> {}
         }
     }
 }
