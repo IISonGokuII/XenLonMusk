@@ -113,6 +113,13 @@ class AppViewModel(private val appContext: Context) {
     private val _downloadQuality = MutableStateFlow(DownloadQuality.HD)
     val downloadQuality: StateFlow<DownloadQuality> = _downloadQuality.asStateFlow()
 
+    // Search loading state
+    private val _isSearchLoading = MutableStateFlow(false)
+    val isSearchLoading: StateFlow<Boolean> = _isSearchLoading.asStateFlow()
+
+    private val _searchError = MutableStateFlow<String?>(null)
+    val searchError: StateFlow<String?> = _searchError.asStateFlow()
+
     // Clipboard monitoring
     private val _clipboardUrl = MutableStateFlow<String?>(null)
     val clipboardUrl: StateFlow<String?> = _clipboardUrl.asStateFlow()
@@ -227,6 +234,8 @@ class AppViewModel(private val appContext: Context) {
 
     fun searchUser(username: String) {
         scope.launch {
+            _isSearchLoading.value = true
+            _searchError.value = null
             _currentProfile.value = null
             _stories.value = DownloadResult.Loading
             _highlights.value = DownloadResult.Loading
@@ -241,6 +250,7 @@ class AppViewModel(private val appContext: Context) {
             when (val result = instagramService.fetchUserProfile(username)) {
                 is DownloadResult.Success -> {
                     _currentProfile.value = result.data
+                    _isSearchLoading.value = false
                     val userId = result.data.userId
 
                     // Add to search history
@@ -286,11 +296,15 @@ class AppViewModel(private val appContext: Context) {
                 }
                 is DownloadResult.Error -> {
                     _currentProfile.value = null
+                    _isSearchLoading.value = false
+                    _searchError.value = result.message
                     _stories.value = DownloadResult.Error(result.message)
                     _highlights.value = DownloadResult.Error(result.message)
                     _feedPosts.value = DownloadResult.Error(result.message)
                 }
-                else -> {}
+                else -> {
+                    _isSearchLoading.value = false
+                }
             }
         }
     }

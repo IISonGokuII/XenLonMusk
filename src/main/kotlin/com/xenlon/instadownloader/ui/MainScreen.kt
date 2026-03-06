@@ -47,6 +47,8 @@ fun MainScreen(
     searchHistory: List<SearchHistoryEntry> = emptyList(),
     downloadQuality: DownloadQuality = DownloadQuality.HD,
     clipboardUrl: String? = null,
+    isSearchLoading: Boolean = false,
+    searchError: String? = null,
     onSearchUser: (String) -> Unit,
     onDownloadProfilePic: () -> Unit,
     onDownloadStories: () -> Unit,
@@ -68,7 +70,6 @@ fun MainScreen(
     onOpenGallery: () -> Unit
 ) {
     var searchQuery by remember { mutableStateOf("") }
-    var isSearching by remember { mutableStateOf(false) }
 
     Column(
         modifier = Modifier
@@ -248,20 +249,34 @@ fun MainScreen(
                 onQueryChange = { searchQuery = it },
                 onSearch = {
                     if (searchQuery.isNotBlank()) {
-                        isSearching = true
                         onSearchUser(searchQuery.trim().removePrefix("@"))
                     }
                 },
-                isSearching = isSearching && profile == null
+                isSearching = isSearchLoading
             )
 
+            // Search error message
+            if (searchError != null) {
+                Card(
+                    shape = RoundedCornerShape(12.dp),
+                    colors = CardDefaults.cardColors(containerColor = Color(0xFF3D1111)),
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)
+                ) {
+                    Text(
+                        text = searchError,
+                        color = Color(0xFFFF6B6B),
+                        modifier = Modifier.padding(16.dp),
+                        fontSize = 14.sp
+                    )
+                }
+            }
+
             // Search history (show when no profile is loaded)
-            if (profile == null && !isSearching && searchHistory.isNotEmpty()) {
+            if (profile == null && !isSearchLoading && searchHistory.isNotEmpty()) {
                 SearchHistorySection(
                     history = searchHistory,
                     onSelect = { entry ->
                         searchQuery = entry.username
-                        isSearching = true
                         onSearchUser(entry.username)
                     },
                     onToggleFavorite = onToggleFavorite,
@@ -276,7 +291,6 @@ fun MainScreen(
 
             // Profile section
             if (profile != null) {
-                isSearching = false
                 ProfileCard(
                     profile = profile,
                     onDownloadProfilePic = onDownloadProfilePic
@@ -354,7 +368,7 @@ fun MainScreen(
                         onDownloadSaved = onDownloadSavedPosts
                     )
                 }
-            } else if (!isSearching) {
+            } else if (!isSearchLoading && searchError == null) {
                 // Welcome card
                 WelcomeCard()
             }

@@ -83,6 +83,8 @@ class MainActivity : ComponentActivity() {
                     }
 
                     AppViewModel.Screen.MAIN -> {
+                        val isSearchLoading by viewModel.isSearchLoading.collectAsState()
+                        val searchError by viewModel.searchError.collectAsState()
                         MainScreen(
                             profile = currentProfile,
                             stories = stories,
@@ -99,6 +101,8 @@ class MainActivity : ComponentActivity() {
                             searchHistory = searchHistory,
                             downloadQuality = downloadQuality,
                             clipboardUrl = clipboardUrl,
+                            isSearchLoading = isSearchLoading,
+                            searchError = searchError,
                             onSearchUser = { viewModel.searchUser(it) },
                             onDownloadProfilePic = { viewModel.downloadProfilePicture() },
                             onDownloadStories = { viewModel.downloadStories() },

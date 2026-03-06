@@ -649,8 +649,11 @@ class InstagramService {
             val allPosts = mutableListOf<FeedPost>()
             var maxId: String? = null
             var hasMore = true
+            var pageCount = 0
+            val maxPages = 20 // Safety limit to prevent infinite loops
 
-            while (hasMore) {
+            while (hasMore && pageCount < maxPages) {
+                pageCount++
                 val response = client.get("$BASE_URL/api/v1/feed/user/$effectiveUserId/") {
                     parameter("count", "33")
                     if (maxId != null) parameter("max_id", maxId)
@@ -677,8 +680,12 @@ class InstagramService {
                     if (post.mediaUrls.isNotEmpty()) allPosts.add(post)
                 }
 
-                hasMore = jsonResponse["more_available"]?.jsonPrimitive?.content?.toBooleanStrictOrNull() ?: false
-                maxId = jsonResponse["next_max_id"]?.jsonPrimitive?.content
+                hasMore = jsonResponse["more_available"]?.jsonPrimitive?.let {
+                    it.booleanOrNull ?: it.content.toBooleanStrictOrNull() ?: (it.content == "1")
+                } ?: false
+                val newMaxId = jsonResponse["next_max_id"]?.jsonPrimitive?.content
+                if (newMaxId == maxId) break // Prevent infinite loop with same max_id
+                maxId = newMaxId
 
                 if (allPosts.size >= 500) break
             }
