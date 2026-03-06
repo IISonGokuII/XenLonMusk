@@ -38,7 +38,10 @@ fun LoginScreen(
     isLoading: Boolean = false,
     errorMessage: String? = null,
     isTwoFactorPending: Boolean = false,
-    twoFactorInfo: TwoFactorInfo? = null
+    twoFactorInfo: TwoFactorInfo? = null,
+    useSms: Boolean = false,
+    onSwitchToSms: () -> Unit = {},
+    onSwitchToTotp: () -> Unit = {}
 ) {
     Box(
         modifier = Modifier
@@ -68,7 +71,10 @@ fun LoginScreen(
                         onCancel = onCancelTwoFactor,
                         isLoading = isLoading,
                         errorMessage = errorMessage,
-                        twoFactorInfo = twoFactorInfo
+                        twoFactorInfo = twoFactorInfo,
+                        useSms = useSms,
+                        onSwitchToSms = onSwitchToSms,
+                        onSwitchToTotp = onSwitchToTotp
                     )
                 } else {
                     LoginContent(
@@ -287,7 +293,10 @@ private fun TwoFactorContent(
     onCancel: () -> Unit,
     isLoading: Boolean,
     errorMessage: String?,
-    twoFactorInfo: TwoFactorInfo?
+    twoFactorInfo: TwoFactorInfo?,
+    useSms: Boolean = false,
+    onSwitchToSms: () -> Unit = {},
+    onSwitchToTotp: () -> Unit = {}
 ) {
     var code by remember { mutableStateOf("") }
 
@@ -320,12 +329,14 @@ private fun TwoFactorContent(
         color = TextPrimary
     )
 
-    // Info text based on 2FA method
+    // Info text based on current 2FA method
     val infoText = when {
+        useSms && twoFactorInfo?.obfuscatedPhone?.isNotEmpty() == true ->
+            "Ein Code wurde per SMS an\n${twoFactorInfo.obfuscatedPhone} gesendet."
+        useSms ->
+            "Gib den SMS-Code ein, der an\ndeine Telefonnummer gesendet wurde."
         twoFactorInfo?.totpEnabled == true ->
             "Gib den 6-stelligen Code aus deiner\nAuthentificator-App ein."
-        twoFactorInfo?.smsEnabled == true && twoFactorInfo.obfuscatedPhone.isNotEmpty() ->
-            "Ein Code wurde per SMS an\n${twoFactorInfo.obfuscatedPhone} gesendet."
         else ->
             "Gib deinen Bestätigungscode ein."
     }
@@ -349,13 +360,13 @@ private fun TwoFactorContent(
             horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             Icon(
-                if (twoFactorInfo?.totpEnabled == true) Icons.Default.PhoneAndroid else Icons.Default.Sms,
+                if (useSms) Icons.Default.Sms else Icons.Default.PhoneAndroid,
                 contentDescription = null,
                 tint = Color(0xFF8B5CF6),
                 modifier = Modifier.size(20.dp)
             )
             Text(
-                text = if (twoFactorInfo?.totpEnabled == true) "Authenticator-App" else "SMS-Code",
+                text = if (useSms) "SMS-Code" else "Authenticator-App",
                 color = TextPrimary,
                 fontSize = 14.sp,
                 fontWeight = FontWeight.Medium
@@ -434,6 +445,41 @@ private fun TwoFactorContent(
             Icon(Icons.Default.CheckCircle, contentDescription = null)
             Spacer(modifier = Modifier.width(8.dp))
             Text("Bestätigen", fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+        }
+    }
+
+    // Switch 2FA method button
+    if (twoFactorInfo?.totpEnabled == true && twoFactorInfo.smsEnabled) {
+        TextButton(
+            onClick = {
+                code = ""
+                if (useSms) onSwitchToTotp() else onSwitchToSms()
+            },
+            enabled = !isLoading
+        ) {
+            Icon(
+                if (useSms) Icons.Default.PhoneAndroid else Icons.Default.Sms,
+                contentDescription = null,
+                modifier = Modifier.size(18.dp)
+            )
+            Spacer(modifier = Modifier.width(6.dp))
+            Text(
+                if (useSms) "Authenticator-App verwenden" else "SMS-Code anfordern",
+                fontSize = 14.sp
+            )
+        }
+    } else if (!useSms && twoFactorInfo?.smsEnabled == true) {
+        // Only SMS available as alternative (no TOTP toggle needed)
+        TextButton(
+            onClick = {
+                code = ""
+                onSwitchToSms()
+            },
+            enabled = !isLoading
+        ) {
+            Icon(Icons.Default.Sms, contentDescription = null, modifier = Modifier.size(18.dp))
+            Spacer(modifier = Modifier.width(6.dp))
+            Text("Stattdessen SMS-Code anfordern", fontSize = 14.sp)
         }
     }
 

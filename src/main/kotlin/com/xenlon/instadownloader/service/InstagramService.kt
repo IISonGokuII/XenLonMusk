@@ -212,8 +212,12 @@ class InstagramService {
                     val twoFactorInfo = loginJson["two_factor_info"]?.jsonObject
                     val identifier = twoFactorInfo?.get("two_factor_identifier")?.jsonPrimitive?.content ?: ""
                     val obfuscatedPhone = twoFactorInfo?.get("obfuscated_phone_number")?.jsonPrimitive?.content ?: ""
-                    val totpEnabled = twoFactorInfo?.get("totp_two_factor_on")?.jsonPrimitive?.content?.toBooleanStrictOrNull() ?: false
-                    val smsEnabled = twoFactorInfo?.get("sms_two_factor_on")?.jsonPrimitive?.content?.toBooleanStrictOrNull() ?: false
+                    val totpEnabled = twoFactorInfo?.get("totp_two_factor_on")?.jsonPrimitive?.let {
+                        it.booleanOrNull ?: it.content.toBooleanStrictOrNull() ?: (it.content == "1")
+                    } ?: false
+                    val smsEnabled = twoFactorInfo?.get("sms_two_factor_on")?.jsonPrimitive?.let {
+                        it.booleanOrNull ?: it.content.toBooleanStrictOrNull() ?: (it.content == "1")
+                    } ?: false
 
                     // Update CSRF token from response cookies
                     val postCookies = cookieStorage.get(Url(BASE_URL))
@@ -306,6 +310,54 @@ class InstagramService {
             }
         } catch (e: Exception) {
             DownloadResult.Error("2FA-Fehler: ${e.message}")
+        }
+    }
+
+    /**
+     * Requests a new SMS code for 2FA verification.
+     */
+    suspend fun requestSmsCode(
+        username: String,
+        identifier: String
+    ): DownloadResult<String> = withContext(Dispatchers.IO) {
+        try {
+            val response = client.post("$BASE_URL/accounts/send_two_factor_login_sms/") {
+                headers {
+                    append(HttpHeaders.UserAgent, USER_AGENT)
+                    append(HttpHeaders.Accept, "*/*")
+                    append(HttpHeaders.AcceptLanguage, "de-DE,de;q=0.9,en-US;q=0.8,en;q=0.7")
+                    append(HttpHeaders.ContentType, "application/x-www-form-urlencoded")
+                    append("X-CSRFToken", csrfToken)
+                    append("X-IG-App-ID", IG_APP_ID)
+                    append("X-ASBD-ID", "129477")
+                    append("X-IG-WWW-Claim", "0")
+                    append("X-Requested-With", "XMLHttpRequest")
+                    append(HttpHeaders.Referrer, "$BASE_URL/accounts/login/two_factor/")
+                    append(HttpHeaders.Origin, BASE_URL)
+                    append("Sec-Fetch-Dest", "empty")
+                    append("Sec-Fetch-Mode", "cors")
+                    append("Sec-Fetch-Site", "same-origin")
+                }
+                setBody(FormDataContent(Parameters.build {
+                    append("username", username)
+                    append("identifier", identifier)
+                }))
+            }
+
+            val body = response.bodyAsText()
+            val jsonResponse = json.decodeFromString<JsonObject>(body)
+
+            val phoneNumber = jsonResponse["obfuscated_phone_number"]?.jsonPrimitive?.content
+                ?: jsonResponse["phone_number_preview"]?.jsonPrimitive?.content
+                ?: ""
+
+            if (phoneNumber.isNotEmpty()) {
+                DownloadResult.Success("SMS-Code gesendet an $phoneNumber")
+            } else {
+                DownloadResult.Success("SMS-Code wurde angefordert")
+            }
+        } catch (e: Exception) {
+            DownloadResult.Error("SMS konnte nicht gesendet werden: ${e.message}")
         }
     }
 

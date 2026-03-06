@@ -94,6 +94,10 @@ class AppViewModel(private val appContext: Context) {
     private val _isTwoFactorPending = MutableStateFlow(false)
     val isTwoFactorPending: StateFlow<Boolean> = _isTwoFactorPending.asStateFlow()
 
+    // Whether to use SMS (true) or TOTP (false) for 2FA
+    private val _useSms2FA = MutableStateFlow(false)
+    val useSms2FA: StateFlow<Boolean> = _useSms2FA.asStateFlow()
+
     // Gallery state
     private val _galleryItems = MutableStateFlow<List<GalleryItem>>(emptyList())
     val galleryItems: StateFlow<List<GalleryItem>> = _galleryItems.asStateFlow()
@@ -157,11 +161,13 @@ class AppViewModel(private val appContext: Context) {
             _isLoginLoading.value = true
             _loginError.value = null
 
+            val useTOTP = !_useSms2FA.value && info.totpEnabled
+
             when (val result = instagramService.verifyTwoFactor(
                 code = code,
                 identifier = info.identifier,
                 username = info.username,
-                useTOTP = info.totpEnabled
+                useTOTP = useTOTP
             )) {
                 is DownloadResult.Success -> {
                     loggedInUsername = info.username
@@ -183,6 +189,32 @@ class AppViewModel(private val appContext: Context) {
     fun cancelTwoFactor() {
         _isTwoFactorPending.value = false
         _twoFactorInfo.value = null
+        _loginError.value = null
+        _useSms2FA.value = false
+    }
+
+    fun switchToSms2FA() {
+        val info = _twoFactorInfo.value ?: return
+        _useSms2FA.value = true
+        _loginError.value = null
+        // Request SMS code
+        scope.launch {
+            _isLoginLoading.value = true
+            when (val result = instagramService.requestSmsCode(info.username, info.identifier)) {
+                is DownloadResult.Success -> {
+                    _loginError.value = null
+                }
+                is DownloadResult.Error -> {
+                    _loginError.value = result.message
+                }
+                else -> {}
+            }
+            _isLoginLoading.value = false
+        }
+    }
+
+    fun switchToTotp2FA() {
+        _useSms2FA.value = false
         _loginError.value = null
     }
 
@@ -644,6 +676,7 @@ class AppViewModel(private val appContext: Context) {
             _isAnonymousMode.value = false
             _isTwoFactorPending.value = false
             _twoFactorInfo.value = null
+            _useSms2FA.value = false
             loggedInUsername = ""
         }
     }

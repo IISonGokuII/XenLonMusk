@@ -66,6 +66,7 @@ class MainActivity : ComponentActivity() {
 
                 when (currentScreen) {
                     AppViewModel.Screen.LOGIN -> {
+                        val useSms2FA by viewModel.useSms2FA.collectAsState()
                         LoginScreen(
                             onLogin = { username, password -> viewModel.login(username, password) },
                             onAnonymousMode = { viewModel.enterAnonymousMode() },
@@ -74,7 +75,10 @@ class MainActivity : ComponentActivity() {
                             isLoading = isLoginLoading,
                             errorMessage = loginError,
                             isTwoFactorPending = isTwoFactorPending,
-                            twoFactorInfo = twoFactorInfo
+                            twoFactorInfo = twoFactorInfo,
+                            useSms = useSms2FA,
+                            onSwitchToSms = { viewModel.switchToSms2FA() },
+                            onSwitchToTotp = { viewModel.switchToTotp2FA() }
                         )
                     }
 
