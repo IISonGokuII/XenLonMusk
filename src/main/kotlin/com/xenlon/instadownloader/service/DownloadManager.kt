@@ -82,7 +82,10 @@ class DownloadManager(
     suspend fun downloadProfilePicture(profile: UserProfile, downloadDir: String = getDownloadDir()): DownloadResult<String> {
         _downloadProgress.value = DownloadProgress.Downloading(0, 1, "Profilbild")
 
-        val url = profile.profilePicUrlHD.ifEmpty { profile.profilePicUrl }
+        val hdUrl = profile.profilePicUrlHD
+        val sdUrl = profile.profilePicUrl
+        val url = hdUrl.ifEmpty { sdUrl }
+
         if (url.isEmpty()) {
             _downloadProgress.value = DownloadProgress.Error("Kein Profilbild verfügbar")
             return DownloadResult.Error("Kein Profilbild verfügbar")
@@ -92,7 +95,13 @@ class DownloadManager(
         val filename = "${profile.username}_profile_pic.$extension"
         val outputPath = File(downloadDir, "${profile.username}/$filename").absolutePath
 
-        val result = instagramService.downloadFile(url, outputPath)
+        var result = instagramService.downloadFile(url, outputPath)
+
+        // If HD download failed and we have a different SD URL, try that as fallback
+        if (result is DownloadResult.Error && hdUrl.isNotEmpty() && sdUrl.isNotEmpty() && hdUrl != sdUrl) {
+            result = instagramService.downloadFile(sdUrl, outputPath)
+        }
+
         _downloadProgress.value = when (result) {
             is DownloadResult.Success -> DownloadProgress.Complete(1, "Profilbild")
             is DownloadResult.Error -> DownloadProgress.Error(result.message)

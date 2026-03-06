@@ -3,7 +3,10 @@ package com.xenlon.instadownloader.ui
 import android.net.Uri
 import androidx.compose.animation.*
 import androidx.compose.foundation.*
-import androidx.compose.foundation.gestures.detectTransformGestures
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.calculatePan
+import androidx.compose.foundation.gestures.calculateZoom
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
@@ -796,20 +799,41 @@ private fun ZoomableImage(
     Box(
         modifier = modifier
             .pointerInput(Unit) {
-                detectTransformGestures { _, pan, zoom, _ ->
-                    scale = (scale * zoom).coerceIn(1f, 5f)
-                    if (scale > 1f) {
-                        offsetX += pan.x
-                        offsetY += pan.y
-                        // Constrain panning
-                        val maxX = (scale - 1f) * size.width / 2f
-                        val maxY = (scale - 1f) * size.height / 2f
-                        offsetX = offsetX.coerceIn(-maxX, maxX)
-                        offsetY = offsetY.coerceIn(-maxY, maxY)
-                    } else {
-                        offsetX = 0f
-                        offsetY = 0f
-                    }
+                awaitEachGesture {
+                    awaitFirstDown(requireUnconsumed = false)
+                    do {
+                        val event = awaitPointerEvent()
+                        val zoomChange = event.calculateZoom()
+                        val panChange = event.calculatePan()
+
+                        if (event.changes.size >= 2) {
+                            // Multi-touch: handle zoom and pan
+                            val newScale = (scale * zoomChange).coerceIn(1f, 5f)
+                            scale = newScale
+                            if (newScale > 1f) {
+                                offsetX += panChange.x
+                                offsetY += panChange.y
+                                val maxX = (newScale - 1f) * size.width / 2f
+                                val maxY = (newScale - 1f) * size.height / 2f
+                                offsetX = offsetX.coerceIn(-maxX, maxX)
+                                offsetY = offsetY.coerceIn(-maxY, maxY)
+                            } else {
+                                offsetX = 0f
+                                offsetY = 0f
+                            }
+                            event.changes.forEach { it.consume() }
+                        } else if (scale > 1f) {
+                            // Single touch while zoomed: allow panning
+                            offsetX += panChange.x
+                            offsetY += panChange.y
+                            val maxX = (scale - 1f) * size.width / 2f
+                            val maxY = (scale - 1f) * size.height / 2f
+                            offsetX = offsetX.coerceIn(-maxX, maxX)
+                            offsetY = offsetY.coerceIn(-maxY, maxY)
+                            event.changes.forEach { it.consume() }
+                        }
+                        // Single touch while not zoomed: don't consume, let HorizontalPager handle swipe
+                    } while (event.changes.any { it.pressed })
                 }
             },
         contentAlignment = Alignment.Center

@@ -221,9 +221,9 @@ class AppViewModel(private val appContext: Context) {
                             userId == instagramService.getSessionUserId())
                     _isOwnProfile.value = isOwn
 
-                    // Fetch feed posts
+                    // Fetch feed posts with userId for pagination
                     launch {
-                        _feedPosts.value = instagramService.fetchFeedPosts(username)
+                        _feedPosts.value = instagramService.fetchFeedPosts(username, userId)
                     }
 
                     if (userId.isNotEmpty() && !_isAnonymousMode.value) {

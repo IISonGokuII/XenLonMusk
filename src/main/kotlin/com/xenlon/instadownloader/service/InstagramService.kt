@@ -259,7 +259,7 @@ class InstagramService {
         useTOTP: Boolean = true
     ): DownloadResult<String> = withContext(Dispatchers.IO) {
         try {
-            val verificationMethod = if (useTOTP) "1" else "1" // 1 = TOTP/SMS code
+            val verificationMethod = if (useTOTP) "3" else "1"
 
             val response = client.post("$BASE_URL/accounts/login/ajax/two_factor/") {
                 headers {
@@ -578,11 +578,70 @@ class InstagramService {
 
     /**
      * Fetches feed posts (posted images/videos) for a user.
-     * Works both anonymously (public profiles) and authenticated.
+     * Uses v1 API with pagination to fetch all posts.
+     * Falls back to web_profile_info for anonymous access if v1 API fails.
      */
-    suspend fun fetchFeedPosts(username: String): DownloadResult<List<FeedPost>> = withContext(Dispatchers.IO) {
+    suspend fun fetchFeedPosts(username: String, userId: String = ""): DownloadResult<List<FeedPost>> = withContext(Dispatchers.IO) {
         try {
-            // Use the web profile endpoint which includes edge_owner_to_timeline_media
+            // Get userId if not provided
+            val effectiveUserId = userId.ifEmpty {
+                val profileResult = fetchUserProfile(username)
+                if (profileResult is DownloadResult.Success) profileResult.data.userId else ""
+            }
+
+            if (effectiveUserId.isEmpty()) {
+                return@withContext fetchFeedPostsFromWebProfile(username)
+            }
+
+            // Use v1 API with pagination
+            val allPosts = mutableListOf<FeedPost>()
+            var maxId: String? = null
+            var hasMore = true
+
+            while (hasMore) {
+                val response = client.get("$BASE_URL/api/v1/feed/user/$effectiveUserId/") {
+                    parameter("count", "33")
+                    if (maxId != null) parameter("max_id", maxId)
+                    if (isLoggedIn) addAuthHeaders("$BASE_URL/$username/")
+                    else addAnonHeaders("$BASE_URL/$username/")
+                }
+
+                if (response.status != HttpStatusCode.OK) {
+                    if (allPosts.isEmpty()) {
+                        // Fallback to web_profile_info
+                        return@withContext fetchFeedPostsFromWebProfile(username)
+                    }
+                    break
+                }
+
+                val body = response.bodyAsText()
+                val jsonResponse = json.decodeFromString<JsonObject>(body)
+
+                val items = jsonResponse["items"]?.jsonArray
+                if (items.isNullOrEmpty()) break
+
+                items.forEach { itemJson ->
+                    val post = parseV1MediaItem(itemJson.jsonObject)
+                    if (post.mediaUrls.isNotEmpty()) allPosts.add(post)
+                }
+
+                hasMore = jsonResponse["more_available"]?.jsonPrimitive?.content?.toBooleanStrictOrNull() ?: false
+                maxId = jsonResponse["next_max_id"]?.jsonPrimitive?.content
+
+                if (allPosts.size >= 500) break
+            }
+
+            DownloadResult.Success(allPosts)
+        } catch (e: Exception) {
+            DownloadResult.Error("Fehler beim Laden der Posts: ${e.message}")
+        }
+    }
+
+    /**
+     * Fallback: fetches feed posts from web_profile_info (limited to first page).
+     */
+    private suspend fun fetchFeedPostsFromWebProfile(username: String): DownloadResult<List<FeedPost>> = withContext(Dispatchers.IO) {
+        try {
             val response = client.get("$BASE_URL/api/v1/users/web_profile_info/") {
                 parameter("username", username)
                 if (isLoggedIn) addAuthHeaders("$BASE_URL/$username/")
@@ -620,11 +679,9 @@ class InstagramService {
                 val isVideo = node["is_video"]?.jsonPrimitive?.content?.toBooleanStrictOrNull() ?: false
                 val isCarousel = typename == "GraphSidecar"
 
-                // Collect media URLs
                 val mediaUrls = mutableListOf<String>()
 
                 if (isCarousel) {
-                    // Carousel: multiple images/videos
                     val sidecarEdges = node["edge_sidecar_to_children"]?.jsonObject
                         ?.get("edges")?.jsonArray
                     sidecarEdges?.forEach { sidecarEdge ->
@@ -638,7 +695,6 @@ class InstagramService {
                         if (url.isNotEmpty()) mediaUrls.add(url)
                     }
                 } else {
-                    // Single image or video
                     val url = if (isVideo) {
                         node["video_url"]?.jsonPrimitive?.content ?: ""
                     } else {
@@ -1027,7 +1083,12 @@ class InstagramService {
             val response = client.get(url) {
                 headers {
                     append(HttpHeaders.UserAgent, USER_AGENT)
+                    append(HttpHeaders.Accept, "image/webp,image/apng,image/*,video/*,*/*;q=0.8")
+                    append(HttpHeaders.AcceptLanguage, "de-DE,de;q=0.9,en-US;q=0.8,en;q=0.7")
                     append(HttpHeaders.Referrer, "$BASE_URL/")
+                    append("Sec-Fetch-Dest", "image")
+                    append("Sec-Fetch-Mode", "no-cors")
+                    append("Sec-Fetch-Site", "cross-site")
                 }
             }
 
