@@ -426,14 +426,28 @@ private fun UserFolderScreen(
     onDeleteItem: (GalleryItem) -> Unit
 ) {
     var selectedCategory by remember { mutableStateOf("Alle") }
+    var sortMode by remember { mutableStateOf(SortMode.DATE_NEWEST) }
+    var showSortMenu by remember { mutableStateOf(false) }
 
     val categories = remember(folder.items) {
         listOf("Alle") + folder.items.map { it.category }.distinct().sorted()
     }
 
-    val filteredItems = remember(folder.items, selectedCategory) {
-        if (selectedCategory == "Alle") folder.items
+    val filteredItems = remember(folder.items, selectedCategory, sortMode) {
+        val filtered = if (selectedCategory == "Alle") folder.items
         else folder.items.filter { it.category == selectedCategory }
+
+        when (sortMode) {
+            SortMode.DATE_NEWEST -> filtered.sortedByDescending { it.lastModified }
+            SortMode.DATE_OLDEST -> filtered.sortedBy { it.lastModified }
+            SortMode.NAME_AZ -> filtered.sortedBy { it.name.lowercase() }
+            SortMode.NAME_ZA -> filtered.sortedByDescending { it.name.lowercase() }
+            SortMode.SIZE_LARGEST -> filtered.sortedByDescending { it.sizeBytes }
+            SortMode.SIZE_SMALLEST -> filtered.sortedBy { it.sizeBytes }
+            SortMode.CATEGORY -> filtered.sortedWith(
+                compareBy<GalleryItem> { it.category }.thenByDescending { it.lastModified }
+            )
+        }
     }
 
     Column(
@@ -479,6 +493,47 @@ private fun UserFolderScreen(
                     }
                     IconButton(onClick = onDeleteSelected, enabled = selectedItems.isNotEmpty()) {
                         Icon(Icons.Default.Delete, "Löschen", tint = ErrorRed)
+                    }
+                }
+                // Sort button
+                Box {
+                    IconButton(onClick = { showSortMenu = true }) {
+                        Icon(Icons.Default.Sort, "Sortieren", tint = TextSecondary)
+                    }
+                    DropdownMenu(
+                        expanded = showSortMenu,
+                        onDismissRequest = { showSortMenu = false }
+                    ) {
+                        SortMode.entries.forEach { mode ->
+                            DropdownMenuItem(
+                                text = {
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                    ) {
+                                        if (sortMode == mode) {
+                                            Icon(
+                                                Icons.Default.Check,
+                                                contentDescription = null,
+                                                tint = AccentPink,
+                                                modifier = Modifier.size(18.dp)
+                                            )
+                                        } else {
+                                            Spacer(modifier = Modifier.size(18.dp))
+                                        }
+                                        Text(
+                                            mode.label,
+                                            color = if (sortMode == mode) AccentPink else TextPrimary,
+                                            fontSize = 14.sp
+                                        )
+                                    }
+                                },
+                                onClick = {
+                                    sortMode = mode
+                                    showSortMenu = false
+                                }
+                            )
+                        }
                     }
                 }
                 IconButton(onClick = onToggleMultiSelect) {
@@ -931,6 +986,19 @@ private fun getCategoryLabel(category: String): String = when (category) {
     "tagged" -> "Markiert"
     "shared" -> "Geteilt"
     else -> category.replaceFirstChar { it.uppercase() }
+}
+
+/**
+ * Sort modes for the gallery user folder view.
+ */
+private enum class SortMode(val label: String) {
+    DATE_NEWEST("Neueste zuerst"),
+    DATE_OLDEST("Älteste zuerst"),
+    NAME_AZ("Name A-Z"),
+    NAME_ZA("Name Z-A"),
+    SIZE_LARGEST("Größte zuerst"),
+    SIZE_SMALLEST("Kleinste zuerst"),
+    CATEGORY("Nach Kategorie")
 }
 
 private fun formatFileSize(bytes: Long): String = when {

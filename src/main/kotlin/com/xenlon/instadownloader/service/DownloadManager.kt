@@ -13,7 +13,8 @@ import java.util.*
  * Manages downloading of Instagram content (stories, highlights, profile pictures).
  */
 class DownloadManager(
-    private val instagramService: InstagramService = InstagramService()
+    private val instagramService: InstagramService = InstagramService(),
+    private val appContext: android.content.Context? = null
 ) {
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
 
@@ -32,20 +33,18 @@ class DownloadManager(
     private val dateFormat = SimpleDateFormat("yyyy-MM-dd_HH-mm-ss", Locale.getDefault())
 
     /**
-     * Gets the default download directory (Downloads/InstaDownloader on Android).
-     * Creates a .nomedia file to hide content from the system gallery.
+     * Gets the download directory using app-specific external storage.
+     * This avoids EACCES permission errors on Android 10+ (Scoped Storage).
+     * Falls back to internal cache if external storage is unavailable.
      */
     fun getDownloadDir(): String {
-        val downloadsDir = android.os.Environment.getExternalStoragePublicDirectory(
-            android.os.Environment.DIRECTORY_DOWNLOADS
-        )
-        val dir = File(downloadsDir, "InstaDownloader")
+        // Use app-specific external storage (no permission needed)
+        val dir = appContext?.getExternalFilesDir(null)?.let { File(it, "InstaDownloader") }
+            ?: appContext?.cacheDir?.let { File(it, "InstaDownloader") }
+            ?: File(android.os.Environment.getExternalStoragePublicDirectory(
+                android.os.Environment.DIRECTORY_DOWNLOADS
+            ), "InstaDownloader")
         dir.mkdirs()
-        // .nomedia prevents Android MediaScanner from indexing these files
-        val nomedia = File(dir, ".nomedia")
-        if (!nomedia.exists()) {
-            nomedia.createNewFile()
-        }
         return dir.absolutePath
     }
 

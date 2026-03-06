@@ -21,7 +21,7 @@ import java.io.File
 class AppViewModel(private val appContext: Context) {
 
     private val instagramService = InstagramService()
-    private val downloadManager = DownloadManager(instagramService)
+    private val downloadManager = DownloadManager(instagramService, appContext)
     private val scope = CoroutineScope(Dispatchers.Main + SupervisorJob())
     private val json = Json { ignoreUnknownKeys = true; isLenient = true }
 
