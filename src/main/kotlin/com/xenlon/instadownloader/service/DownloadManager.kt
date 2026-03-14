@@ -14,6 +14,7 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
@@ -47,6 +48,22 @@ class DownloadManager(
     private val dateFormat = SimpleDateFormat("yyyy-MM-dd_HH-mm-ss", Locale.getDefault())
     private val metadataJson = Json { ignoreUnknownKeys = true }
     var onlyNewDownloads: Boolean = true
+
+    init {
+        appContext?.let { context ->
+            DownloadForegroundService.createChannel(context)
+            scope.launch {
+                _downloadProgress.collectLatest { progress ->
+                    when (progress) {
+                        is DownloadProgress.Downloading -> DownloadForegroundService.startOrUpdate(context, progress)
+                        is DownloadProgress.Complete,
+                        is DownloadProgress.Error,
+                        DownloadProgress.Idle -> DownloadForegroundService.stop(context)
+                    }
+                }
+            }
+        }
+    }
 
     /**
      * Gets the download directory using app-specific external storage.

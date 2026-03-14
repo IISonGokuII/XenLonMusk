@@ -22,7 +22,7 @@ import java.util.Locale
 
 class AppViewModel(private val appContext: Context) {
 
-    private val instagramService = InstagramService()
+    private val instagramService = InstagramService(appContext)
     private val downloadManager = DownloadManager(instagramService, appContext)
     private val scope = CoroutineScope(Dispatchers.Main + SupervisorJob())
     private val json = Json { ignoreUnknownKeys = true; isLenient = true }
@@ -137,6 +137,9 @@ class AppViewModel(private val appContext: Context) {
         loadQualityPreference()
         loadDownloadPreferences()
         startClipboardMonitoring()
+        if (instagramService.isAuthenticated()) {
+            _currentScreen.value = Screen.MAIN
+        }
     }
 
     // --- Login ---

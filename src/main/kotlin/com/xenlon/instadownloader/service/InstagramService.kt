@@ -1,5 +1,6 @@
 package com.xenlon.instadownloader.service
 
+import android.content.Context
 import com.xenlon.instadownloader.model.*
 import io.ktor.client.*
 import io.ktor.client.engine.okhttp.*
@@ -9,14 +10,17 @@ import io.ktor.client.request.*
 import io.ktor.client.request.forms.*
 import io.ktor.client.statement.*
 import io.ktor.http.*
+import io.ktor.util.date.GMTDate
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.*
 import java.io.IOException
 
@@ -24,7 +28,9 @@ import java.io.IOException
  * Service for fetching Instagram data using session-based authentication.
  * Logs in with username/password and uses the session cookies to access data.
  */
-class InstagramService {
+class InstagramService(
+    private val appContext: Context? = null,
+) {
 
     private val json = Json {
         ignoreUnknownKeys = true
@@ -57,6 +63,26 @@ class InstagramService {
     private var nextAllowedRequestAtMillis = 0L
     private val _requestHealth = MutableStateFlow(RequestHealthState())
     val requestHealth: StateFlow<RequestHealthState> = _requestHealth.asStateFlow()
+    private val sessionPrefs = appContext?.getSharedPreferences("instagram_session", Context.MODE_PRIVATE)
+
+    @kotlinx.serialization.Serializable
+    private data class StoredCookie(
+        val name: String,
+        val value: String,
+        val domain: String? = null,
+        val path: String? = null,
+        val secure: Boolean = false,
+        val httpOnly: Boolean = false,
+        val expiresTimestamp: Long? = null,
+    )
+
+    init {
+        if (sessionPrefs != null) {
+            runBlocking {
+                restorePersistedSession()
+            }
+        }
+    }
 
     private fun JsonElement?.asObjectOrNull(): JsonObject? = this as? JsonObject
 
@@ -160,6 +186,70 @@ class InstagramService {
         private const val USER_AGENT =
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
         private const val IG_APP_ID = "936619743392459"
+        private const val SESSION_COOKIES_KEY = "session_cookies"
+        private const val SESSION_USERNAME_KEY = "session_username"
+    }
+
+    private suspend fun restorePersistedSession() {
+        val prefs = sessionPrefs ?: return
+        val storedCookies = prefs.getString(SESSION_COOKIES_KEY, null).orEmpty()
+        if (storedCookies.isBlank()) return
+
+        val cookies = runCatching {
+            json.decodeFromString<List<StoredCookie>>(storedCookies)
+        }.getOrNull().orEmpty()
+
+        if (cookies.isEmpty()) return
+
+        cookies.forEach { stored ->
+            cookieStorage.addCookie(
+                Url(BASE_URL),
+                Cookie(
+                    name = stored.name,
+                    value = stored.value,
+                    domain = stored.domain,
+                    path = stored.path ?: "/",
+                    secure = stored.secure,
+                    httpOnly = stored.httpOnly,
+                    expires = stored.expiresTimestamp?.let { GMTDate(it) },
+                )
+            )
+        }
+
+        val restoredCookies = cookieStorage.get(Url(BASE_URL))
+        csrfToken = restoredCookies.find { it.name == "csrftoken" }?.value.orEmpty()
+        sessionUserId = restoredCookies.find { it.name == "ds_user_id" }?.value.orEmpty()
+        isLoggedIn = restoredCookies.any { it.name == "sessionid" && it.value.isNotBlank() }
+    }
+
+    private suspend fun persistSession(username: String) {
+        val prefs = sessionPrefs ?: return
+        val cookies = cookieStorage.get(Url(BASE_URL))
+        val serialized = cookies
+            .filter { it.value.isNotBlank() }
+            .map { cookie ->
+                StoredCookie(
+                    name = cookie.name,
+                    value = cookie.value,
+                    domain = cookie.domain,
+                    path = cookie.path,
+                    secure = cookie.secure,
+                    httpOnly = cookie.httpOnly,
+                    expiresTimestamp = cookie.expires?.timestamp,
+                )
+            }
+
+        prefs.edit()
+            .putString(SESSION_COOKIES_KEY, json.encodeToString(serialized))
+            .putString(SESSION_USERNAME_KEY, username)
+            .apply()
+    }
+
+    private fun clearPersistedSession() {
+        sessionPrefs?.edit()
+            ?.remove(SESSION_COOKIES_KEY)
+            ?.remove(SESSION_USERNAME_KEY)
+            ?.apply()
     }
 
     private suspend fun awaitRequestSlot(reason: String) {
@@ -415,6 +505,7 @@ class InstagramService {
             csrfToken = postLoginCookies.find { it.name == "csrftoken" }?.value ?: csrfToken
             sessionUserId = userId
             isLoggedIn = true
+            persistSession(username)
 
             DownloadResult.Success("Erfolgreich eingeloggt als $username")
         } catch (e: Exception) {
@@ -475,6 +566,7 @@ class InstagramService {
                 csrfToken = postLoginCookies.find { it.name == "csrftoken" }?.value ?: csrfToken
                 sessionUserId = userId
                 isLoggedIn = true
+                persistSession(username)
                 DownloadResult.Success("Erfolgreich eingeloggt als $username")
             } else {
                 val message = jsonResponse["message"]?.jsonPrimitive?.content
@@ -557,9 +649,11 @@ class InstagramService {
             isLoggedIn = false
             sessionUserId = ""
             csrfToken = ""
+            clearPersistedSession()
             DownloadResult.Success("Erfolgreich ausgeloggt")
         } catch (e: Exception) {
             isLoggedIn = false
+            clearPersistedSession()
             DownloadResult.Success("Ausgeloggt")
         }
     }
