@@ -16,6 +16,8 @@ import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.Sort
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -50,6 +52,12 @@ private data class UserFolder(
     val previewItem: GalleryItem
 )
 
+private enum class MediaFilter(val label: String) {
+    ALL("Alle"),
+    IMAGES("Bilder"),
+    VIDEOS("Videos")
+}
+
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
 fun GalleryScreen(
@@ -65,6 +73,7 @@ fun GalleryScreen(
     var viewerStartIndex by remember { mutableIntStateOf(-1) }
     var viewerItems by remember { mutableStateOf<List<GalleryItem>>(emptyList()) }
     var showDeleteConfirm by remember { mutableStateOf<GalleryItem?>(null) }
+    var rootSearchQuery by remember { mutableStateOf("") }
 
     // Multi-select state
     var isMultiSelectMode by remember { mutableStateOf(false) }
@@ -72,17 +81,27 @@ fun GalleryScreen(
     var showBatchDeleteConfirm by remember { mutableStateOf(false) }
 
     // Group items by username into folders
-    val userFolders = remember(galleryItems) {
+    val userFolders = remember(galleryItems, rootSearchQuery) {
+        val normalizedQuery = rootSearchQuery.trim().lowercase()
         galleryItems
+            .filter { item ->
+                normalizedQuery.isBlank() ||
+                    item.username.lowercase().contains(normalizedQuery) ||
+                    item.category.lowercase().contains(normalizedQuery) ||
+                    item.caption.lowercase().contains(normalizedQuery) ||
+                    item.highlightTitle.lowercase().contains(normalizedQuery) ||
+                    item.shortcode.lowercase().contains(normalizedQuery) ||
+                    item.name.lowercase().contains(normalizedQuery)
+            }
             .groupBy { it.username.ifEmpty { "Andere" } }
             .map { (username, items) ->
                 UserFolder(
                     username = username,
-                    items = items.sortedByDescending { it.lastModified },
-                    previewItem = items.maxByOrNull { it.lastModified } ?: items.first()
+                    items = items.sortedByDescending { it.sourceTimestamp.takeIf { ts -> ts > 0L } ?: it.lastModified },
+                    previewItem = items.maxByOrNull { it.sourceTimestamp.takeIf { ts -> ts > 0L } ?: it.lastModified } ?: items.first()
                 )
             }
-            .sortedByDescending { it.items.maxOfOrNull { item -> item.lastModified } ?: 0L }
+            .sortedByDescending { it.items.maxOfOrNull { item -> item.sourceTimestamp.takeIf { ts -> ts > 0L } ?: item.lastModified } ?: 0L }
     }
 
     // Full-screen pager viewer
@@ -124,18 +143,19 @@ fun GalleryScreen(
                     isMultiSelectMode = false
                     selectedItems = emptySet()
                 },
-                onItemClick = { item ->
+                onToggleItem = { item ->
                     if (isMultiSelectMode) {
                         selectedItems = if (selectedItems.contains(item.file.absolutePath)) {
                             selectedItems - item.file.absolutePath
                         } else {
                             selectedItems + item.file.absolutePath
                         }
-                    } else {
-                        val idx = folder.items.indexOf(item)
-                        viewerItems = folder.items
-                        viewerStartIndex = if (idx >= 0) idx else 0
                     }
+                },
+                onOpenViewer = { visibleItems, item ->
+                    val idx = visibleItems.indexOf(item)
+                    viewerItems = visibleItems
+                    viewerStartIndex = if (idx >= 0) idx else 0
                 },
                 onToggleMultiSelect = {
                     isMultiSelectMode = !isMultiSelectMode
@@ -150,9 +170,7 @@ fun GalleryScreen(
                     isMultiSelectMode = false
                     selectedItems = emptySet()
                 },
-                onDeleteSelected = { showBatchDeleteConfirm = true },
-                onSaveToGallery = onSaveToGallery,
-                onDeleteItem = { item -> showDeleteConfirm = item }
+                onDeleteSelected = { showBatchDeleteConfirm = true }
             )
 
             if (showDeleteConfirm != null) {
@@ -238,7 +256,7 @@ fun GalleryScreen(
             },
             navigationIcon = {
                 IconButton(onClick = onBack) {
-                    Icon(Icons.Default.ArrowBack, "Zurück", tint = TextPrimary)
+                    Icon(Icons.AutoMirrored.Filled.ArrowBack, "Zurück", tint = TextPrimary)
                 }
             },
             actions = {
@@ -289,6 +307,34 @@ fun GalleryScreen(
                 }
             }
         } else {
+            OutlinedTextField(
+                value = rootSearchQuery,
+                onValueChange = { rootSearchQuery = it },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 12.dp, vertical = 12.dp),
+                placeholder = { Text("Profile, Kategorien oder Captions durchsuchen") },
+                singleLine = true,
+                leadingIcon = {
+                    Icon(Icons.Default.Search, contentDescription = null, tint = TextSecondary)
+                },
+                trailingIcon = {
+                    if (rootSearchQuery.isNotBlank()) {
+                        IconButton(onClick = { rootSearchQuery = "" }) {
+                            Icon(Icons.Default.Close, contentDescription = "Suche leeren", tint = TextSecondary)
+                        }
+                    }
+                },
+                shape = RoundedCornerShape(14.dp),
+                colors = OutlinedTextFieldDefaults.colors(
+                    focusedBorderColor = AccentPink,
+                    unfocusedBorderColor = DarkSurfaceVariant,
+                    focusedTextColor = TextPrimary,
+                    unfocusedTextColor = TextPrimary,
+                    cursorColor = AccentPink
+                )
+            )
+
             LazyVerticalGrid(
                 columns = GridCells.Fixed(2),
                 modifier = Modifier
@@ -417,15 +463,16 @@ private fun UserFolderScreen(
     isMultiSelectMode: Boolean,
     selectedItems: Set<String>,
     onBack: () -> Unit,
-    onItemClick: (GalleryItem) -> Unit,
+    onToggleItem: (GalleryItem) -> Unit,
+    onOpenViewer: (List<GalleryItem>, GalleryItem) -> Unit,
     onToggleMultiSelect: () -> Unit,
     onSelectAll: () -> Unit,
     onSaveSelected: () -> Unit,
-    onDeleteSelected: () -> Unit,
-    onSaveToGallery: (GalleryItem) -> Unit,
-    onDeleteItem: (GalleryItem) -> Unit
+    onDeleteSelected: () -> Unit
 ) {
     var selectedCategory by remember { mutableStateOf("Alle") }
+    var selectedMediaFilter by remember { mutableStateOf(MediaFilter.ALL) }
+    var searchQuery by remember { mutableStateOf("") }
     var sortMode by remember { mutableStateOf(SortMode.DATE_NEWEST) }
     var showSortMenu by remember { mutableStateOf(false) }
 
@@ -433,19 +480,37 @@ private fun UserFolderScreen(
         listOf("Alle") + folder.items.map { it.category }.distinct().sorted()
     }
 
-    val filteredItems = remember(folder.items, selectedCategory, sortMode) {
-        val filtered = if (selectedCategory == "Alle") folder.items
+    val filteredItems = remember(folder.items, selectedCategory, selectedMediaFilter, searchQuery, sortMode) {
+        val normalizedQuery = searchQuery.trim().lowercase()
+        val filteredByCategory = if (selectedCategory == "Alle") folder.items
         else folder.items.filter { it.category == selectedCategory }
 
+        val filteredByType = when (selectedMediaFilter) {
+            MediaFilter.ALL -> filteredByCategory
+            MediaFilter.IMAGES -> filteredByCategory.filterNot { it.isVideo }
+            MediaFilter.VIDEOS -> filteredByCategory.filter { it.isVideo }
+        }
+
+        val filtered = filteredByType.filter { item ->
+            normalizedQuery.isBlank() ||
+                item.name.lowercase().contains(normalizedQuery) ||
+                item.caption.lowercase().contains(normalizedQuery) ||
+                item.highlightTitle.lowercase().contains(normalizedQuery) ||
+                item.shortcode.lowercase().contains(normalizedQuery) ||
+                item.category.lowercase().contains(normalizedQuery)
+        }
+
         when (sortMode) {
-            SortMode.DATE_NEWEST -> filtered.sortedByDescending { it.lastModified }
-            SortMode.DATE_OLDEST -> filtered.sortedBy { it.lastModified }
+            SortMode.DATE_NEWEST -> filtered.sortedByDescending { it.sourceTimestamp.takeIf { ts -> ts > 0L } ?: it.lastModified }
+            SortMode.DATE_OLDEST -> filtered.sortedBy { it.sourceTimestamp.takeIf { ts -> ts > 0L } ?: it.lastModified }
             SortMode.NAME_AZ -> filtered.sortedBy { it.name.lowercase() }
             SortMode.NAME_ZA -> filtered.sortedByDescending { it.name.lowercase() }
             SortMode.SIZE_LARGEST -> filtered.sortedByDescending { it.sizeBytes }
             SortMode.SIZE_SMALLEST -> filtered.sortedBy { it.sizeBytes }
             SortMode.CATEGORY -> filtered.sortedWith(
-                compareBy<GalleryItem> { it.category }.thenByDescending { it.lastModified }
+                compareBy<GalleryItem> { it.category }.thenByDescending {
+                    it.sourceTimestamp.takeIf { ts -> ts > 0L } ?: it.lastModified
+                }
             )
         }
     }
@@ -471,7 +536,7 @@ private fun UserFolderScreen(
                             fontSize = 18.sp
                         )
                         Text(
-                            "${folder.items.size} Dateien",
+                            "${filteredItems.size} von ${folder.items.size} Dateien",
                             fontSize = 12.sp,
                             color = TextSecondary
                         )
@@ -480,7 +545,7 @@ private fun UserFolderScreen(
             },
             navigationIcon = {
                 IconButton(onClick = onBack) {
-                    Icon(Icons.Default.ArrowBack, "Zurück", tint = TextPrimary)
+                    Icon(Icons.AutoMirrored.Filled.ArrowBack, "Zurück", tint = TextPrimary)
                 }
             },
             actions = {
@@ -498,7 +563,7 @@ private fun UserFolderScreen(
                 // Sort button
                 Box {
                     IconButton(onClick = { showSortMenu = true }) {
-                        Icon(Icons.Default.Sort, "Sortieren", tint = TextSecondary)
+                        Icon(Icons.AutoMirrored.Filled.Sort, "Sortieren", tint = TextSecondary)
                     }
                     DropdownMenu(
                         expanded = showSortMenu,
@@ -550,6 +615,57 @@ private fun UserFolderScreen(
             )
         )
 
+        OutlinedTextField(
+            value = searchQuery,
+            onValueChange = { searchQuery = it },
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 8.dp),
+            placeholder = { Text("Dateiname, Caption, Highlight oder Shortcode suchen") },
+            singleLine = true,
+            leadingIcon = {
+                Icon(Icons.Default.Search, contentDescription = null, tint = TextSecondary)
+            },
+            trailingIcon = {
+                if (searchQuery.isNotBlank()) {
+                    IconButton(onClick = { searchQuery = "" }) {
+                        Icon(Icons.Default.Close, contentDescription = "Suche leeren", tint = TextSecondary)
+                    }
+                }
+            },
+            shape = RoundedCornerShape(14.dp),
+            colors = OutlinedTextFieldDefaults.colors(
+                focusedBorderColor = AccentPink,
+                unfocusedBorderColor = DarkSurfaceVariant,
+                focusedTextColor = TextPrimary,
+                unfocusedTextColor = TextPrimary,
+                cursorColor = AccentPink
+            )
+        )
+
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .horizontalScroll(rememberScrollState())
+                .padding(horizontal = 16.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            MediaFilter.entries.forEach { filter ->
+                FilterChip(
+                    selected = selectedMediaFilter == filter,
+                    onClick = { selectedMediaFilter = filter },
+                    label = { Text(filter.label, fontSize = 13.sp) },
+                    colors = FilterChipDefaults.filterChipColors(
+                        selectedContainerColor = AccentPurple,
+                        selectedLabelColor = Color.White,
+                        containerColor = DarkSurfaceVariant,
+                        labelColor = TextSecondary
+                    ),
+                    shape = RoundedCornerShape(20.dp)
+                )
+            }
+        }
+
         // Category filter chips
         if (categories.size > 2) {
             Row(
@@ -596,10 +712,13 @@ private fun UserFolderScreen(
                     item = item,
                     isSelected = selectedItems.contains(item.file.absolutePath),
                     isMultiSelectMode = isMultiSelectMode,
-                    onClick = { onItemClick(item) },
+                    onClick = {
+                        if (isMultiSelectMode) onToggleItem(item)
+                        else onOpenViewer(filteredItems, item)
+                    },
                     onLongClick = {
                         if (!isMultiSelectMode) onToggleMultiSelect()
-                        onItemClick(item)
+                        onToggleItem(item)
                     }
                 )
             }
@@ -751,7 +870,7 @@ private fun GalleryPagerViewer(
             },
             navigationIcon = {
                 IconButton(onClick = onDismiss) {
-                    Icon(Icons.Default.ArrowBack, "Zurück", tint = Color.White)
+                    Icon(Icons.AutoMirrored.Filled.ArrowBack, "Zurück", tint = Color.White)
                 }
             },
             colors = TopAppBarDefaults.topAppBarColors(

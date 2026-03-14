@@ -63,6 +63,7 @@ class MainActivity : ComponentActivity() {
                 val searchHistory by viewModel.searchHistory.collectAsState()
                 val downloadQuality by viewModel.downloadQuality.collectAsState()
                 val clipboardUrl by viewModel.clipboardUrl.collectAsState()
+                val requestHealth by viewModel.requestHealth.collectAsState()
 
                 when (currentScreen) {
                     AppViewModel.Screen.LOGIN -> {
@@ -101,6 +102,7 @@ class MainActivity : ComponentActivity() {
                             searchHistory = searchHistory,
                             downloadQuality = downloadQuality,
                             clipboardUrl = clipboardUrl,
+                            requestHealth = requestHealth,
                             isSearchLoading = isSearchLoading,
                             searchError = searchError,
                             onSearchUser = { viewModel.searchUser(it) },

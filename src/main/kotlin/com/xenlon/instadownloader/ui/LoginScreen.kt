@@ -10,6 +10,8 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.Login
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -224,7 +226,7 @@ private fun LoginContent(
             Spacer(modifier = Modifier.width(8.dp))
             Text("Wird eingeloggt...", fontSize = 16.sp)
         } else {
-            Icon(Icons.Default.Login, contentDescription = null)
+            Icon(Icons.AutoMirrored.Filled.Login, contentDescription = null)
             Spacer(modifier = Modifier.width(8.dp))
             Text("Anmelden", fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
         }
@@ -488,7 +490,7 @@ private fun TwoFactorContent(
         onClick = onCancel,
         enabled = !isLoading
     ) {
-        Icon(Icons.Default.ArrowBack, contentDescription = null, modifier = Modifier.size(18.dp))
+        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = null, modifier = Modifier.size(18.dp))
         Spacer(modifier = Modifier.width(6.dp))
         Text("Zurück zum Login", fontSize = 14.sp)
     }

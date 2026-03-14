@@ -17,6 +17,8 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.serialization.json.*
 import java.io.File
+import java.text.SimpleDateFormat
+import java.util.Locale
 
 class AppViewModel(private val appContext: Context) {
 
@@ -27,6 +29,7 @@ class AppViewModel(private val appContext: Context) {
 
     private val prefs: SharedPreferences =
         appContext.getSharedPreferences("insta_downloader", Context.MODE_PRIVATE)
+    private val fileNameTimestampFormat = SimpleDateFormat("yyyy-MM-dd_HH-mm-ss", Locale.getDefault())
 
     // Screen state
     enum class Screen { LOGIN, MAIN, GALLERY }
@@ -108,6 +111,7 @@ class AppViewModel(private val appContext: Context) {
 
     // Download progress
     val downloadProgress: StateFlow<DownloadProgress> = downloadManager.downloadProgress
+    val requestHealth: StateFlow<RequestHealthState> = instagramService.requestHealth
 
     // Quality selection
     private val _downloadQuality = MutableStateFlow(DownloadQuality.HD)
@@ -263,34 +267,22 @@ class AppViewModel(private val appContext: Context) {
                             userId == instagramService.getSessionUserId())
                     _isOwnProfile.value = isOwn
 
-                    // Fetch feed posts with userId for pagination
-                    launch {
-                        _feedPosts.value = instagramService.fetchFeedPosts(username, userId)
-                    }
+                    _feedPosts.value = instagramService.fetchFeedPosts(username, userId)
 
                     if (userId.isNotEmpty() && !_isAnonymousMode.value) {
-                        // Fetch stories, highlights, reels, tagged in parallel
-                        launch { _stories.value = instagramService.fetchStories(userId) }
-                        launch { _highlights.value = instagramService.fetchHighlights(userId) }
-                        launch {
-                            _reels.value = DownloadResult.Loading
-                            _reels.value = instagramService.fetchReels(userId)
-                        }
-                        launch {
-                            _taggedPosts.value = DownloadResult.Loading
-                            _taggedPosts.value = instagramService.fetchTaggedPosts(userId)
-                        }
+                        _stories.value = instagramService.fetchStories(userId)
+                        _highlights.value = instagramService.fetchHighlights(userId)
+                        _reels.value = DownloadResult.Loading
+                        _reels.value = instagramService.fetchReels(userId)
+                        _taggedPosts.value = DownloadResult.Loading
+                        _taggedPosts.value = instagramService.fetchTaggedPosts(userId)
 
                         // Own-profile-only data
                         if (isOwn) {
-                            launch {
-                                _archivedPosts.value = DownloadResult.Loading
-                                _archivedPosts.value = instagramService.fetchArchivedPosts()
-                            }
-                            launch {
-                                _savedPosts.value = DownloadResult.Loading
-                                _savedPosts.value = instagramService.fetchSavedPosts()
-                            }
+                            _archivedPosts.value = DownloadResult.Loading
+                            _archivedPosts.value = instagramService.fetchArchivedPosts()
+                            _savedPosts.value = DownloadResult.Loading
+                            _savedPosts.value = instagramService.fetchSavedPosts()
                         }
                     }
                 }
@@ -459,6 +451,7 @@ class AppViewModel(private val appContext: Context) {
         scope.launch(Dispatchers.IO) {
             items.forEach { item ->
                 if (item.file.exists()) item.file.delete()
+                metadataFileFor(item.file).delete()
             }
             _galleryItems.value = _galleryItems.value.filter { existing ->
                 items.none { it.file.absolutePath == existing.file.absolutePath }
@@ -494,21 +487,31 @@ class AppViewModel(private val appContext: Context) {
                 .map { file ->
                     val relativePath = file.relativeTo(dir).path
                     val parts = relativePath.split(File.separator)
-                    val username = if (parts.size >= 2) parts[0] else ""
-                    val category = if (parts.size >= 3) parts[1] else
-                        if (file.name.contains("profile_pic")) "profile" else "posts"
+                    val metadata = readMetadata(file)
+                    val username = metadata?.username?.takeIf { it.isNotBlank() }
+                        ?: if (parts.size >= 2) parts[0] else ""
+                    val category = metadata?.category?.takeIf { it.isNotBlank() }
+                        ?: if (parts.size >= 3) parts[1] else
+                            if (file.name.contains("profile_pic")) "profile" else "posts"
+                    val sourceTimestamp = metadata?.sourceTimestamp?.takeIf { it > 0L }
+                        ?: deriveSourceTimestamp(file)
 
                     GalleryItem(
                         file = file,
                         name = file.name,
-                        isVideo = file.extension.lowercase() in listOf("mp4", "mov"),
+                        isVideo = metadata?.isVideo ?: (file.extension.lowercase() in listOf("mp4", "mov")),
                         sizeBytes = file.length(),
                         lastModified = file.lastModified(),
+                        sourceTimestamp = sourceTimestamp,
                         username = username,
-                        category = category
+                        category = category,
+                        caption = metadata?.caption.orEmpty(),
+                        shortcode = metadata?.shortcode.orEmpty(),
+                        sourceId = metadata?.sourceId.orEmpty(),
+                        highlightTitle = metadata?.highlightTitle.orEmpty(),
                     )
                 }
-                .sortedByDescending { it.lastModified }
+                .sortedByDescending { it.sourceTimestamp.takeIf { ts -> ts > 0L } ?: it.lastModified }
                 .toList()
 
             _galleryItems.value = items
@@ -575,8 +578,28 @@ class AppViewModel(private val appContext: Context) {
             if (item.file.exists()) {
                 item.file.delete()
             }
+            metadataFileFor(item.file).delete()
             _galleryItems.value = _galleryItems.value.filter { it.file.absolutePath != item.file.absolutePath }
         }
+    }
+
+    private fun readMetadata(file: File): DownloadedMediaMetadata? {
+        val metadataFile = metadataFileFor(file)
+        if (!metadataFile.exists()) return null
+        return runCatching {
+            json.decodeFromString<DownloadedMediaMetadata>(metadataFile.readText())
+        }.getOrNull()
+    }
+
+    private fun metadataFileFor(file: File): File = File("${file.absolutePath}.meta.json")
+
+    private fun deriveSourceTimestamp(file: File): Long {
+        val rawTimestamp = Regex("(\\d{4}-\\d{2}-\\d{2}_\\d{2}-\\d{2}-\\d{2})")
+            .find(file.name)
+            ?.groupValues
+            ?.getOrNull(1)
+            ?: return 0L
+        return runCatching { fileNameTimestampFormat.parse(rawTimestamp)?.time ?: 0L }.getOrDefault(0L)
     }
 
     // --- Search History ---

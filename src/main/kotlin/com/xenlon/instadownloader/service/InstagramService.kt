@@ -9,9 +9,16 @@ import io.ktor.client.request.*
 import io.ktor.client.request.forms.*
 import io.ktor.client.statement.*
 import io.ktor.http.*
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.json.*
+import java.io.IOException
 
 /**
  * Service for fetching Instagram data using session-based authentication.
@@ -42,6 +49,14 @@ class InstagramService {
     private var isLoggedIn: Boolean = false
     private var sessionUserId: String = ""
     var preferHD: Boolean = true
+    private val requestMutex = Mutex()
+    private val requestTimestamps = ArrayDeque<Long>()
+    private val minRequestSpacingMillis = 1200L
+    private val softBurstWindowMillis = 60_000L
+    private val softBurstLimit = 18
+    private var nextAllowedRequestAtMillis = 0L
+    private val _requestHealth = MutableStateFlow(RequestHealthState())
+    val requestHealth: StateFlow<RequestHealthState> = _requestHealth.asStateFlow()
 
     /**
      * Picks the best image URL from a candidates array based on quality preference.
@@ -128,6 +143,138 @@ class InstagramService {
         private const val IG_APP_ID = "936619743392459"
     }
 
+    private suspend fun awaitRequestSlot(reason: String) {
+        var waitMillis: Long
+        var recentCount: Int
+
+        requestMutex.withLock {
+            val now = System.currentTimeMillis()
+            while (requestTimestamps.isNotEmpty() && now - requestTimestamps.first() > softBurstWindowMillis) {
+                requestTimestamps.removeFirst()
+            }
+
+            recentCount = requestTimestamps.size
+            val spacingWait = (nextAllowedRequestAtMillis - now).coerceAtLeast(0L)
+            val burstWait = if (recentCount >= softBurstLimit) 10_000L else 0L
+            waitMillis = maxOf(spacingWait, burstWait)
+
+            if (waitMillis > 0L) {
+                val cooldownUntil = now + waitMillis
+                _requestHealth.value = RequestHealthState(
+                    level = RequestHealthLevel.COOLDOWN,
+                    message = "Schonmodus aktiv, um Login und Requests zu entschärfen.",
+                    recentRequestCount = recentCount,
+                    cooldownUntilMillis = cooldownUntil,
+                    lastUpdatedMillis = now
+                )
+            } else {
+                _requestHealth.value = RequestHealthState(
+                    level = RequestHealthLevel.ACTIVE,
+                    message = "Lädt mit reduziertem Tempo: $reason",
+                    recentRequestCount = recentCount,
+                    cooldownUntilMillis = 0L,
+                    lastUpdatedMillis = now
+                )
+            }
+        }
+
+        if (waitMillis > 0L) {
+            delay(waitMillis)
+        }
+
+        requestMutex.withLock {
+            val now = System.currentTimeMillis()
+            requestTimestamps.addLast(now)
+            nextAllowedRequestAtMillis = now + minRequestSpacingMillis
+            _requestHealth.value = RequestHealthState(
+                level = RequestHealthLevel.ACTIVE,
+                message = "Lädt vorsichtig, um Sperren und Checkpoints zu vermeiden.",
+                recentRequestCount = requestTimestamps.size,
+                cooldownUntilMillis = 0L,
+                lastUpdatedMillis = now
+            )
+        }
+    }
+
+    private suspend fun updateHealthFromStatus(status: HttpStatusCode, responseLabel: String) {
+        val now = System.currentTimeMillis()
+        when (status) {
+            HttpStatusCode.TooManyRequests -> {
+                requestMutex.withLock {
+                    nextAllowedRequestAtMillis = maxOf(nextAllowedRequestAtMillis, now + 60_000L)
+                }
+                _requestHealth.value = RequestHealthState(
+                    level = RequestHealthLevel.COOLDOWN,
+                    message = "Instagram limitiert gerade Anfragen. Die App wartet automatisch kurz.",
+                    recentRequestCount = requestTimestamps.size,
+                    cooldownUntilMillis = now + 60_000L,
+                    lastUpdatedMillis = now
+                )
+            }
+            HttpStatusCode.Forbidden, HttpStatusCode.Unauthorized -> {
+                requestMutex.withLock {
+                    nextAllowedRequestAtMillis = maxOf(nextAllowedRequestAtMillis, now + 30_000L)
+                }
+                _requestHealth.value = RequestHealthState(
+                    level = RequestHealthLevel.WARNING,
+                    message = "$responseLabel wurde von Instagram eingeschränkt. Bitte langsamer weiterarbeiten.",
+                    recentRequestCount = requestTimestamps.size,
+                    cooldownUntilMillis = now + 30_000L,
+                    lastUpdatedMillis = now
+                )
+            }
+            else -> if (status.value in 200..299) {
+                _requestHealth.value = _requestHealth.value.copy(
+                    level = RequestHealthLevel.ACTIVE,
+                    message = "Verbindung stabil, Requests bleiben gedrosselt.",
+                    cooldownUntilMillis = 0L,
+                    lastUpdatedMillis = now
+                )
+            }
+        }
+    }
+
+    private suspend fun throttledRequest(
+        reason: String,
+        responseLabel: String = reason,
+        block: suspend () -> HttpResponse
+    ): HttpResponse {
+        var lastError: Exception? = null
+        var lastResponse: HttpResponse? = null
+
+        repeat(3) { attempt ->
+            awaitRequestSlot(reason)
+            try {
+                val response = block()
+                lastResponse = response
+                updateHealthFromStatus(response.status, responseLabel)
+
+                if (response.status == HttpStatusCode.TooManyRequests && attempt < 2) {
+                    delay((attempt + 1) * 20_000L)
+                    return@repeat
+                }
+
+                return response
+            } catch (e: HttpRequestTimeoutException) {
+                lastError = e
+                _requestHealth.value = RequestHealthState(
+                    level = RequestHealthLevel.WARNING,
+                    message = "Request-Timeout bei $responseLabel. Neuer Versuch mit mehr Abstand.",
+                    recentRequestCount = requestTimestamps.size,
+                    cooldownUntilMillis = System.currentTimeMillis() + ((attempt + 1) * 5_000L),
+                    lastUpdatedMillis = System.currentTimeMillis()
+                )
+                delay((attempt + 1) * 5_000L)
+            } catch (e: IOException) {
+                lastError = e
+                delay((attempt + 1) * 3_000L)
+            }
+        }
+
+        lastResponse?.let { return it }
+        throw lastError ?: IllegalStateException("Unbekannter Netzwerkfehler bei $responseLabel")
+    }
+
     /**
      * Returns whether the user is currently logged in.
      */
@@ -145,11 +292,13 @@ class InstagramService {
     suspend fun login(username: String, password: String): DownloadResult<String> = withContext(Dispatchers.IO) {
         try {
             // Step 1: Get initial page to obtain CSRF token
-            val initialResponse = client.get(BASE_URL) {
+            val initialResponse = throttledRequest("Startseite laden", "Login vorbereiten") {
+                client.get(BASE_URL) {
                 headers {
                     append(HttpHeaders.UserAgent, USER_AGENT)
                     append(HttpHeaders.Accept, "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
                     append(HttpHeaders.AcceptLanguage, "de-DE,de;q=0.9,en-US;q=0.8,en;q=0.7")
+                }
                 }
             }
 
@@ -171,7 +320,8 @@ class InstagramService {
             // Step 2: Perform login
             val timestamp = System.currentTimeMillis() / 1000
 
-            val loginResponse = client.post(LOGIN_URL) {
+            val loginResponse = throttledRequest("Login senden", "Instagram-Login") {
+                client.post(LOGIN_URL) {
                 headers {
                     append(HttpHeaders.UserAgent, USER_AGENT)
                     append(HttpHeaders.Accept, "*/*")
@@ -196,6 +346,7 @@ class InstagramService {
                     append("stopDeletionNonce", "")
                     append("trustedDeviceRecords", "{}")
                 }))
+                }
             }
 
             val loginBody = loginResponse.bodyAsText()
@@ -265,7 +416,8 @@ class InstagramService {
         try {
             val verificationMethod = if (useTOTP) "3" else "1"
 
-            val response = client.post("$BASE_URL/accounts/login/ajax/two_factor/") {
+            val response = throttledRequest("2FA senden", "Zwei-Faktor-Bestätigung") {
+                client.post("$BASE_URL/accounts/login/ajax/two_factor/") {
                 headers {
                     append(HttpHeaders.UserAgent, USER_AGENT)
                     append(HttpHeaders.Accept, "*/*")
@@ -290,6 +442,7 @@ class InstagramService {
                     append("trust_signal", "true")
                     append("verification_method", verificationMethod)
                 }))
+                }
             }
 
             val body = response.bodyAsText()
@@ -321,7 +474,8 @@ class InstagramService {
         identifier: String
     ): DownloadResult<String> = withContext(Dispatchers.IO) {
         try {
-            val response = client.post("$BASE_URL/accounts/send_two_factor_login_sms/") {
+            val response = throttledRequest("2FA-SMS anfordern", "SMS-Code anfordern") {
+                client.post("$BASE_URL/accounts/send_two_factor_login_sms/") {
                 headers {
                     append(HttpHeaders.UserAgent, USER_AGENT)
                     append(HttpHeaders.Accept, "*/*")
@@ -342,6 +496,7 @@ class InstagramService {
                     append("username", username)
                     append("identifier", identifier)
                 }))
+                }
             }
 
             val body = response.bodyAsText()
@@ -366,7 +521,8 @@ class InstagramService {
      */
     suspend fun logout(): DownloadResult<String> = withContext(Dispatchers.IO) {
         try {
-            client.post("$BASE_URL/accounts/logout/ajax/") {
+            throttledRequest("Logout", "Instagram-Logout") {
+                client.post("$BASE_URL/accounts/logout/ajax/") {
                 headers {
                     append(HttpHeaders.UserAgent, USER_AGENT)
                     append("X-CSRFToken", csrfToken)
@@ -377,6 +533,7 @@ class InstagramService {
                 setBody(FormDataContent(Parameters.build {
                     append("one_tap_app_login", "0")
                 }))
+                }
             }
             isLoggedIn = false
             sessionUserId = ""
@@ -431,10 +588,12 @@ class InstagramService {
      */
     suspend fun fetchUserProfile(username: String): DownloadResult<UserProfile> = withContext(Dispatchers.IO) {
         try {
-            val response = client.get("$BASE_URL/api/v1/users/web_profile_info/") {
+            val response = throttledRequest("Profil laden", "Profilinformationen") {
+                client.get("$BASE_URL/api/v1/users/web_profile_info/") {
                 parameter("username", username)
                 if (isLoggedIn) addAuthHeaders("$BASE_URL/$username/")
                 else addAnonHeaders("$BASE_URL/$username/")
+                }
             }
 
             if (response.status != HttpStatusCode.OK) {
@@ -474,9 +633,11 @@ class InstagramService {
      */
     suspend fun fetchStories(userId: String): DownloadResult<List<StoryItem>> = withContext(Dispatchers.IO) {
         try {
-            val response = client.get("$BASE_URL/api/v1/feed/reels_media/") {
+            val response = throttledRequest("Stories laden", "Story-Abruf") {
+                client.get("$BASE_URL/api/v1/feed/reels_media/") {
                 parameter("reel_ids", userId)
                 addAuthHeaders()
+                }
             }
 
             if (response.status != HttpStatusCode.OK) {
@@ -531,8 +692,10 @@ class InstagramService {
      */
     suspend fun fetchHighlights(userId: String): DownloadResult<List<HighlightReel>> = withContext(Dispatchers.IO) {
         try {
-            val response = client.get("$BASE_URL/api/v1/highlights/$userId/highlights_tray/") {
+            val response = throttledRequest("Highlights laden", "Highlight-Abruf") {
+                client.get("$BASE_URL/api/v1/highlights/$userId/highlights_tray/") {
                 addAuthHeaders()
+                }
             }
 
             if (response.status != HttpStatusCode.OK) {
@@ -576,9 +739,11 @@ class InstagramService {
         try {
             val reelId = if (highlightId.startsWith("highlight:")) highlightId else "highlight:$highlightId"
 
-            val response = client.get("$BASE_URL/api/v1/feed/reels_media/") {
+            val response = throttledRequest("Highlight-Inhalte laden", "Highlight-Inhalte") {
+                client.get("$BASE_URL/api/v1/feed/reels_media/") {
                 parameter("reel_ids", reelId)
                 addAuthHeaders()
+                }
             }
 
             if (response.status != HttpStatusCode.OK) {
@@ -654,11 +819,13 @@ class InstagramService {
 
             while (hasMore && pageCount < maxPages) {
                 pageCount++
-                val response = client.get("$BASE_URL/api/v1/feed/user/$effectiveUserId/") {
+                val response = throttledRequest("Posts laden", "Feed-Seite $pageCount") {
+                    client.get("$BASE_URL/api/v1/feed/user/$effectiveUserId/") {
                     parameter("count", "33")
                     if (maxId != null) parameter("max_id", maxId)
                     if (isLoggedIn) addAuthHeaders("$BASE_URL/$username/")
                     else addAnonHeaders("$BASE_URL/$username/")
+                    }
                 }
 
                 if (response.status != HttpStatusCode.OK) {
@@ -701,10 +868,12 @@ class InstagramService {
      */
     private suspend fun fetchFeedPostsFromWebProfile(username: String): DownloadResult<List<FeedPost>> = withContext(Dispatchers.IO) {
         try {
-            val response = client.get("$BASE_URL/api/v1/users/web_profile_info/") {
+            val response = throttledRequest("Öffentliche Posts laden", "Öffentlicher Feed") {
+                client.get("$BASE_URL/api/v1/users/web_profile_info/") {
                 parameter("username", username)
                 if (isLoggedIn) addAuthHeaders("$BASE_URL/$username/")
                 else addAnonHeaders("$BASE_URL/$username/")
+                }
             }
 
             if (response.status != HttpStatusCode.OK) {
@@ -807,11 +976,13 @@ class InstagramService {
 
             // Paginate through archived posts
             while (hasMore) {
-                val response = client.get("$BASE_URL/api/v1/feed/only_me_feed/") {
+                val response = throttledRequest("Archiv laden", "Archiv-Seite") {
+                    client.get("$BASE_URL/api/v1/feed/only_me_feed/") {
                     if (maxId != null) {
                         parameter("max_id", maxId)
                     }
                     addAuthHeaders()
+                    }
                 }
 
                 if (response.status != HttpStatusCode.OK) {
@@ -862,7 +1033,8 @@ class InstagramService {
             var hasMore = true
 
             while (hasMore) {
-                val response = client.post("$BASE_URL/api/v1/clips/user/") {
+                val response = throttledRequest("Reels laden", "Reels-Seite") {
+                    client.post("$BASE_URL/api/v1/clips/user/") {
                     addAuthHeaders()
                     headers {
                         append(HttpHeaders.ContentType, "application/x-www-form-urlencoded")
@@ -873,6 +1045,7 @@ class InstagramService {
                         if (maxId != null) append("max_id", maxId!!)
                         append("include_feed_video", "true")
                     }))
+                    }
                 }
 
                 if (response.status != HttpStatusCode.OK) {
@@ -927,9 +1100,11 @@ class InstagramService {
             var hasMore = true
 
             while (hasMore) {
-                val response = client.get("$BASE_URL/api/v1/feed/saved/posts/") {
+                val response = throttledRequest("Gespeicherte Posts laden", "Gespeicherte Posts") {
+                    client.get("$BASE_URL/api/v1/feed/saved/posts/") {
                     if (maxId != null) parameter("max_id", maxId)
                     addAuthHeaders()
+                    }
                 }
 
                 if (response.status != HttpStatusCode.OK) {
@@ -979,9 +1154,11 @@ class InstagramService {
             var hasMore = true
 
             while (hasMore) {
-                val response = client.get("$BASE_URL/api/v1/usertags/$userId/feed/") {
+                val response = throttledRequest("Markierte Posts laden", "Markierte Posts") {
+                    client.get("$BASE_URL/api/v1/usertags/$userId/feed/") {
                     if (maxId != null) parameter("max_id", maxId)
                     addAuthHeaders()
+                    }
                 }
 
                 if (response.status != HttpStatusCode.OK) {
@@ -1041,9 +1218,11 @@ class InstagramService {
      */
     suspend fun fetchPostByShortcode(shortcode: String): DownloadResult<FeedPost> = withContext(Dispatchers.IO) {
         try {
-            val response = client.get("$BASE_URL/api/v1/media/${shortcode}/info/") {
+            val response = throttledRequest("Geteilten Post laden", "Post per Shortcode") {
+                client.get("$BASE_URL/api/v1/media/${shortcode}/info/") {
                 if (isLoggedIn) addAuthHeaders("$BASE_URL/p/$shortcode/")
                 else addAnonHeaders("$BASE_URL/p/$shortcode/")
+                }
             }
 
             if (response.status != HttpStatusCode.OK) {
@@ -1067,9 +1246,11 @@ class InstagramService {
 
     private suspend fun fetchPostByShortcodeGraphQL(shortcode: String): DownloadResult<FeedPost> = withContext(Dispatchers.IO) {
         try {
-            val response = client.get("$BASE_URL/p/$shortcode/?__a=1&__d=dis") {
+            val response = throttledRequest("GraphQL-Fallback laden", "Post-Fallback") {
+                client.get("$BASE_URL/p/$shortcode/?__a=1&__d=dis") {
                 if (isLoggedIn) addAuthHeaders("$BASE_URL/p/$shortcode/")
                 else addAnonHeaders("$BASE_URL/p/$shortcode/")
+                }
             }
 
             if (response.status != HttpStatusCode.OK) {
@@ -1139,7 +1320,8 @@ class InstagramService {
      */
     suspend fun downloadFile(url: String, outputPath: String): DownloadResult<String> = withContext(Dispatchers.IO) {
         try {
-            val response = client.get(url) {
+            val response = throttledRequest("Datei herunterladen", "Mediendownload") {
+                client.get(url) {
                 headers {
                     append(HttpHeaders.UserAgent, USER_AGENT)
                     append(HttpHeaders.Accept, "image/webp,image/apng,image/*,video/*,*/*;q=0.8")
@@ -1148,6 +1330,7 @@ class InstagramService {
                     append("Sec-Fetch-Dest", "image")
                     append("Sec-Fetch-Mode", "no-cors")
                     append("Sec-Fetch-Site", "cross-site")
+                }
                 }
             }
 

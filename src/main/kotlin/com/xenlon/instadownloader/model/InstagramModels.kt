@@ -2,6 +2,7 @@ package com.xenlon.instadownloader.model
 
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
+import java.io.File
 
 /**
  * Represents the type of media content from Instagram.
@@ -18,6 +19,21 @@ enum class DownloadQuality(val label: String) {
     HD("HD - Beste Qualität"),
     SD("SD - Kleinere Dateien")
 }
+
+enum class RequestHealthLevel {
+    IDLE,
+    ACTIVE,
+    COOLDOWN,
+    WARNING
+}
+
+data class RequestHealthState(
+    val level: RequestHealthLevel = RequestHealthLevel.IDLE,
+    val message: String = "",
+    val recentRequestCount: Int = 0,
+    val cooldownUntilMillis: Long = 0L,
+    val lastUpdatedMillis: Long = System.currentTimeMillis()
+)
 
 /**
  * Represents a downloadable Instagram media item.
@@ -89,13 +105,30 @@ data class FeedPost(
  * Represents a downloaded file in the in-app gallery.
  */
 data class GalleryItem(
-    val file: java.io.File,
+    val file: File,
     val name: String,
     val isVideo: Boolean,
     val sizeBytes: Long,
     val lastModified: Long,
+    val sourceTimestamp: Long = 0L,
     val username: String = "",
-    val category: String = "" // stories, highlights, posts, archive, profile
+    val category: String = "", // stories, highlights, posts, archive, profile
+    val caption: String = "",
+    val shortcode: String = "",
+    val sourceId: String = "",
+    val highlightTitle: String = "",
+) 
+
+@Serializable
+data class DownloadedMediaMetadata(
+    val username: String = "",
+    val category: String = "",
+    val sourceTimestamp: Long = 0L,
+    val caption: String = "",
+    val shortcode: String = "",
+    val sourceId: String = "",
+    val highlightTitle: String = "",
+    val isVideo: Boolean = false,
 )
 
 /**
