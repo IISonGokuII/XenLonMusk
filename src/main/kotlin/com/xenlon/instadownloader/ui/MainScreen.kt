@@ -78,6 +78,7 @@ fun MainScreen(
     taggedPosts: DownloadResult<List<FeedPost>>?,
     sharedPost: DownloadResult<FeedPost>?,
     downloadProgress: DownloadProgress,
+    downloadQueue: List<DownloadQueueItem>,
     isAnonymousMode: Boolean = false,
     isOwnProfile: Boolean = false,
     searchHistory: List<SearchHistoryEntry> = emptyList(),
@@ -104,6 +105,8 @@ fun MainScreen(
     onToggleQuality: () -> Unit = {},
     onToggleDownloadOnlyNew: () -> Unit = {},
     onDownloadPreviewItem: (category: String, sourceId: String) -> Unit = { _, _ -> },
+    onRetryQueueItem: (DownloadQueueItem) -> Unit = {},
+    onCancelQueueItem: (DownloadQueueItem) -> Unit = {},
     onHandleClipboardUrl: () -> Unit = {},
     onDismissClipboardUrl: () -> Unit = {},
     onLogout: () -> Unit,
@@ -376,6 +379,14 @@ fun MainScreen(
             // Download progress
             AnimatedVisibility(visible = downloadProgress !is DownloadProgress.Idle) {
                 DownloadProgressCard(downloadProgress)
+            }
+
+            if (downloadQueue.isNotEmpty()) {
+                DownloadQueueCard(
+                    queueItems = downloadQueue,
+                    onRetryItem = onRetryQueueItem,
+                    onCancelItem = onCancelQueueItem
+                )
             }
 
             // Profile section
@@ -2615,6 +2626,127 @@ private fun formatCount(count: Long): String {
         count >= 1_000_000 -> String.format("%.1fM", count / 1_000_000.0)
         count >= 1_000 -> String.format("%.1fK", count / 1_000.0)
         else -> count.toString()
+    }
+}
+
+@Composable
+private fun DownloadQueueCard(
+    queueItems: List<DownloadQueueItem>,
+    onRetryItem: (DownloadQueueItem) -> Unit,
+    onCancelItem: (DownloadQueueItem) -> Unit,
+) {
+    val waiting = queueItems.count { it.status == DownloadQueueStatus.WAITING }
+    val running = queueItems.count { it.status == DownloadQueueStatus.RUNNING }
+    val completed = queueItems.count { it.status == DownloadQueueStatus.COMPLETED }
+    val failed = queueItems.count { it.status == DownloadQueueStatus.FAILED }
+
+    Card(
+        shape = RoundedCornerShape(18.dp),
+        colors = CardDefaults.cardColors(containerColor = DarkSurface)
+    ) {
+        Column(
+            modifier = Modifier.padding(18.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Icon(Icons.Default.Download, contentDescription = null, tint = AccentPurple)
+                    Column {
+                        Text("Download-Queue", color = TextPrimary, fontWeight = FontWeight.Bold)
+                        Text(
+                            "$running laeuft, $waiting wartet, $failed fehlgeschlagen, $completed fertig",
+                            color = TextSecondary,
+                            fontSize = 12.sp
+                        )
+                    }
+                }
+                Text(
+                    "${queueItems.size} Jobs",
+                    color = AccentPink,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.SemiBold
+                )
+            }
+
+            queueItems.take(8).forEach { item ->
+                DownloadQueueRow(
+                    item = item,
+                    onRetryItem = onRetryItem,
+                    onCancelItem = onCancelItem
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun DownloadQueueRow(
+    item: DownloadQueueItem,
+    onRetryItem: (DownloadQueueItem) -> Unit,
+    onCancelItem: (DownloadQueueItem) -> Unit,
+) {
+    val accent = when (item.status) {
+        DownloadQueueStatus.RUNNING -> AccentPink
+        DownloadQueueStatus.WAITING -> AccentPurple
+        DownloadQueueStatus.COMPLETED -> SuccessGreen
+        DownloadQueueStatus.FAILED -> ErrorRed
+        DownloadQueueStatus.CANCELLED -> WarningOrange
+    }
+    val statusLabel = when (item.status) {
+        DownloadQueueStatus.RUNNING -> "Laeuft"
+        DownloadQueueStatus.WAITING -> "Wartet"
+        DownloadQueueStatus.COMPLETED -> "Fertig"
+        DownloadQueueStatus.FAILED -> "Fehlgeschlagen"
+        DownloadQueueStatus.CANCELLED -> "Abgebrochen"
+    }
+
+    Card(
+        shape = RoundedCornerShape(14.dp),
+        colors = CardDefaults.cardColors(containerColor = DarkSurfaceVariant)
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(10.dp)
+                    .clip(CircleShape)
+                    .background(accent)
+            )
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    item.label,
+                    color = TextPrimary,
+                    fontSize = 13.sp,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Text(statusLabel, color = accent, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+            }
+            when (item.status) {
+                DownloadQueueStatus.FAILED, DownloadQueueStatus.CANCELLED -> {
+                    TextButton(onClick = { onRetryItem(item) }) {
+                        Text("Erneut", color = AccentPink)
+                    }
+                }
+                DownloadQueueStatus.WAITING, DownloadQueueStatus.RUNNING -> {
+                    TextButton(onClick = { onCancelItem(item) }) {
+                        Text("Abbrechen", color = WarningOrange)
+                    }
+                }
+                DownloadQueueStatus.COMPLETED -> {
+                    Icon(Icons.Default.CheckCircle, contentDescription = null, tint = SuccessGreen, modifier = Modifier.size(18.dp))
+                }
+            }
+        }
     }
 }
 

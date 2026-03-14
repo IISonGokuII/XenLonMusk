@@ -31,7 +31,16 @@ class DownloadWorker(
         const val KEY_LABEL = "label"
         const val KEY_METADATA = "metadata"
         private const val UNIQUE_QUEUE_NAME = "insta_download_queue"
+        private const val QUEUE_PREFS = "download_queue_registry"
         private val json = Json { ignoreUnknownKeys = true }
+
+        @kotlinx.serialization.Serializable
+        data class QueuePayload(
+            val sourceUrl: String,
+            val outputPath: String,
+            val label: String,
+            val metadataJson: String,
+        )
 
         fun createNotificationChannel(context: Context) {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -74,10 +83,35 @@ class DownloadWorker(
                 .addTag(UNIQUE_QUEUE_NAME)
                 .build()
 
+            persistQueuePayload(
+                context = context,
+                workId = request.id.toString(),
+                payload = QueuePayload(
+                    sourceUrl = url,
+                    outputPath = outputPath,
+                    label = label,
+                    metadataJson = metadata?.let { json.encodeToString(it) }.orEmpty(),
+                )
+            )
+
             WorkManager.getInstance(context)
                 .beginUniqueWork(UNIQUE_QUEUE_NAME, ExistingWorkPolicy.APPEND_OR_REPLACE, request)
                 .enqueue()
             return request.id
+        }
+
+        fun getQueuePayload(context: Context, workId: String): QueuePayload? {
+            val raw = context.getSharedPreferences(QUEUE_PREFS, Context.MODE_PRIVATE)
+                .getString(workId, null)
+                ?: return null
+            return runCatching { json.decodeFromString<QueuePayload>(raw) }.getOrNull()
+        }
+
+        private fun persistQueuePayload(context: Context, workId: String, payload: QueuePayload) {
+            context.getSharedPreferences(QUEUE_PREFS, Context.MODE_PRIVATE)
+                .edit()
+                .putString(workId, json.encodeToString(payload))
+                .apply()
         }
     }
 

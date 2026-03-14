@@ -57,6 +57,7 @@ class MainActivity : ComponentActivity() {
                 val taggedPosts by viewModel.taggedPosts.collectAsState()
                 val sharedPost by viewModel.sharedPost.collectAsState()
                 val downloadProgress by viewModel.downloadProgress.collectAsState()
+                val downloadQueue by viewModel.downloadQueue.collectAsState()
                 val isAnonymousMode by viewModel.isAnonymousMode.collectAsState()
                 val isOwnProfile by viewModel.isOwnProfile.collectAsState()
                 val galleryItems by viewModel.galleryItems.collectAsState()
@@ -98,6 +99,7 @@ class MainActivity : ComponentActivity() {
                             taggedPosts = taggedPosts,
                             sharedPost = sharedPost,
                             downloadProgress = downloadProgress,
+                            downloadQueue = downloadQueue,
                             isAnonymousMode = isAnonymousMode,
                             isOwnProfile = isOwnProfile,
                             searchHistory = searchHistory,
@@ -126,6 +128,8 @@ class MainActivity : ComponentActivity() {
                             onDownloadPreviewItem = { category, sourceId ->
                                 viewModel.downloadPreviewItem(category, sourceId)
                             },
+                            onRetryQueueItem = { viewModel.retryQueueItem(it) },
+                            onCancelQueueItem = { viewModel.cancelQueueItem(it) },
                             onHandleClipboardUrl = { viewModel.handleClipboardUrl() },
                             onDismissClipboardUrl = { viewModel.dismissClipboardUrl() },
                             onLogout = { viewModel.logout() },

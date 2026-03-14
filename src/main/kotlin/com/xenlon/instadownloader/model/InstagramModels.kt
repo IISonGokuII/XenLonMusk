@@ -132,6 +132,23 @@ data class DownloadedMediaMetadata(
     val isVideo: Boolean = false,
 )
 
+enum class DownloadQueueStatus {
+    WAITING,
+    RUNNING,
+    COMPLETED,
+    FAILED,
+    CANCELLED,
+}
+
+data class DownloadQueueItem(
+    val workId: String,
+    val label: String,
+    val outputPath: String,
+    val sourceUrl: String,
+    val status: DownloadQueueStatus,
+    val metadataJson: String = "",
+)
+
 /**
  * Represents a search history entry for quick profile access.
  */

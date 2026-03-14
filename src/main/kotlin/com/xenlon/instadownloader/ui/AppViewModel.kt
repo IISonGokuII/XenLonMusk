@@ -7,18 +7,23 @@ import android.content.SharedPreferences
 import android.media.MediaScannerConnection
 import android.os.Environment
 import android.provider.MediaStore
+import androidx.work.WorkInfo
+import androidx.work.WorkManager
 import com.xenlon.instadownloader.model.*
 import com.xenlon.instadownloader.service.DownloadManager
 import com.xenlon.instadownloader.service.DownloadProgress
+import com.xenlon.instadownloader.service.DownloadWorker
 import com.xenlon.instadownloader.service.InstagramService
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.serialization.json.*
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Locale
+import java.util.UUID
 
 class AppViewModel(private val appContext: Context) {
 
@@ -113,6 +118,10 @@ class AppViewModel(private val appContext: Context) {
     val downloadProgress: StateFlow<DownloadProgress> = downloadManager.downloadProgress
     val requestHealth: StateFlow<RequestHealthState> = instagramService.requestHealth
 
+    private val workManager = WorkManager.getInstance(appContext)
+    private val _downloadQueue = MutableStateFlow<List<DownloadQueueItem>>(emptyList())
+    val downloadQueue: StateFlow<List<DownloadQueueItem>> = _downloadQueue.asStateFlow()
+
     // Quality selection
     private val _downloadQuality = MutableStateFlow(DownloadQuality.HD)
     val downloadQuality: StateFlow<DownloadQuality> = _downloadQuality.asStateFlow()
@@ -140,6 +149,7 @@ class AppViewModel(private val appContext: Context) {
         if (instagramService.isAuthenticated()) {
             _currentScreen.value = Screen.MAIN
         }
+        observeDownloadQueue()
     }
 
     // --- Login ---
@@ -653,6 +663,26 @@ class AppViewModel(private val appContext: Context) {
         }
     }
 
+    fun retryQueueItem(item: DownloadQueueItem) {
+        scope.launch(Dispatchers.IO) {
+            DownloadWorker.enqueueDownload(
+                context = appContext,
+                url = item.sourceUrl,
+                outputPath = item.outputPath,
+                label = item.label,
+                metadata = item.metadataJson.takeIf { it.isNotBlank() }?.let {
+                    runCatching { json.decodeFromString<DownloadedMediaMetadata>(it) }.getOrNull()
+                },
+            )
+        }
+    }
+
+    fun cancelQueueItem(item: DownloadQueueItem) {
+        scope.launch(Dispatchers.IO) {
+            runCatching { workManager.cancelWorkById(UUID.fromString(item.workId)) }
+        }
+    }
+
     private fun readMetadata(file: File): DownloadedMediaMetadata? {
         val metadataFile = metadataFileFor(file)
         if (!metadataFile.exists()) return null
@@ -695,6 +725,39 @@ class AppViewModel(private val appContext: Context) {
         } catch (_: Exception) {
             _searchHistory.value = emptyList()
         }
+    }
+
+    private fun observeDownloadQueue() {
+        scope.launch {
+            workManager.getWorkInfosByTagFlow("insta_download_queue").collectLatest { workInfos ->
+                _downloadQueue.value = workInfos
+                    .sortedByDescending { it.runAttemptCount }
+                    .map { info -> info.toQueueItem() }
+            }
+        }
+    }
+
+    private fun WorkInfo.toQueueItem(): DownloadQueueItem {
+        val status = when (state) {
+            WorkInfo.State.ENQUEUED, WorkInfo.State.BLOCKED -> DownloadQueueStatus.WAITING
+            WorkInfo.State.RUNNING -> DownloadQueueStatus.RUNNING
+            WorkInfo.State.SUCCEEDED -> DownloadQueueStatus.COMPLETED
+            WorkInfo.State.FAILED -> DownloadQueueStatus.FAILED
+            WorkInfo.State.CANCELLED -> DownloadQueueStatus.CANCELLED
+        }
+        val payload = DownloadWorker.getQueuePayload(appContext, id.toString())
+
+        return DownloadQueueItem(
+            workId = id.toString(),
+            label = progress.getString(DownloadWorker.KEY_LABEL)
+                ?: outputData.getString(DownloadWorker.KEY_LABEL)
+                ?: payload?.label
+                ?: "Download",
+            outputPath = payload?.outputPath.orEmpty(),
+            sourceUrl = payload?.sourceUrl.orEmpty(),
+            status = status,
+            metadataJson = payload?.metadataJson.orEmpty(),
+        )
     }
 
     private fun saveSearchHistory() {
