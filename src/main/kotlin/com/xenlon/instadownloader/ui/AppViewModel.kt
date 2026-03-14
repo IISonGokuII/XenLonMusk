@@ -683,6 +683,33 @@ class AppViewModel(private val appContext: Context) {
         }
     }
 
+    fun retryFailedQueueItems() {
+        val retryableItems = _downloadQueue.value.filter {
+            it.status == DownloadQueueStatus.FAILED || it.status == DownloadQueueStatus.CANCELLED
+        }
+        retryableItems.forEach { retryQueueItem(it) }
+    }
+
+    fun cancelActiveQueueItems() {
+        val activeItems = _downloadQueue.value.filter {
+            it.status == DownloadQueueStatus.WAITING || it.status == DownloadQueueStatus.RUNNING
+        }
+        activeItems.forEach { cancelQueueItem(it) }
+    }
+
+    fun clearFinishedQueueItems() {
+        val finishedIds = _downloadQueue.value
+            .filter { it.status == DownloadQueueStatus.COMPLETED }
+            .map { it.workId }
+
+        scope.launch(Dispatchers.IO) {
+            runCatching { workManager.pruneWork() }
+            finishedIds.forEach { workId ->
+                DownloadWorker.removeQueuePayload(appContext, workId)
+            }
+        }
+    }
+
     private fun readMetadata(file: File): DownloadedMediaMetadata? {
         val metadataFile = metadataFileFor(file)
         if (!metadataFile.exists()) return null

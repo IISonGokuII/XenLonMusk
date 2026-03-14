@@ -65,6 +65,13 @@ private enum class ContentSortMode(val label: String) {
     MOST_LIKED("Top")
 }
 
+private enum class QueueFilterTab(val label: String) {
+    ALL("Alle"),
+    ACTIVE("Aktiv"),
+    FAILED("Fehler"),
+    COMPLETED("Fertig")
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun MainScreen(
@@ -107,6 +114,9 @@ fun MainScreen(
     onDownloadPreviewItem: (category: String, sourceId: String) -> Unit = { _, _ -> },
     onRetryQueueItem: (DownloadQueueItem) -> Unit = {},
     onCancelQueueItem: (DownloadQueueItem) -> Unit = {},
+    onRetryFailedQueueItems: () -> Unit = {},
+    onCancelActiveQueueItems: () -> Unit = {},
+    onClearFinishedQueueItems: () -> Unit = {},
     onHandleClipboardUrl: () -> Unit = {},
     onDismissClipboardUrl: () -> Unit = {},
     onLogout: () -> Unit,
@@ -385,7 +395,10 @@ fun MainScreen(
                 DownloadQueueCard(
                     queueItems = downloadQueue,
                     onRetryItem = onRetryQueueItem,
-                    onCancelItem = onCancelQueueItem
+                    onCancelItem = onCancelQueueItem,
+                    onRetryFailedItems = onRetryFailedQueueItems,
+                    onCancelActiveItems = onCancelActiveQueueItems,
+                    onClearFinishedItems = onClearFinishedQueueItems
                 )
             }
 
@@ -2634,11 +2647,24 @@ private fun DownloadQueueCard(
     queueItems: List<DownloadQueueItem>,
     onRetryItem: (DownloadQueueItem) -> Unit,
     onCancelItem: (DownloadQueueItem) -> Unit,
+    onRetryFailedItems: () -> Unit,
+    onCancelActiveItems: () -> Unit,
+    onClearFinishedItems: () -> Unit,
 ) {
+    var selectedFilter by remember { mutableStateOf(QueueFilterTab.ALL) }
     val waiting = queueItems.count { it.status == DownloadQueueStatus.WAITING }
     val running = queueItems.count { it.status == DownloadQueueStatus.RUNNING }
     val completed = queueItems.count { it.status == DownloadQueueStatus.COMPLETED }
     val failed = queueItems.count { it.status == DownloadQueueStatus.FAILED }
+    val cancelled = queueItems.count { it.status == DownloadQueueStatus.CANCELLED }
+    val filteredItems = queueItems.filter { item ->
+        when (selectedFilter) {
+            QueueFilterTab.ALL -> true
+            QueueFilterTab.ACTIVE -> item.status == DownloadQueueStatus.WAITING || item.status == DownloadQueueStatus.RUNNING
+            QueueFilterTab.FAILED -> item.status == DownloadQueueStatus.FAILED || item.status == DownloadQueueStatus.CANCELLED
+            QueueFilterTab.COMPLETED -> item.status == DownloadQueueStatus.COMPLETED
+        }
+    }
 
     Card(
         shape = RoundedCornerShape(18.dp),
@@ -2664,21 +2690,103 @@ private fun DownloadQueueCard(
                         )
                     }
                 }
-                Text(
-                    "${queueItems.size} Jobs",
-                    color = AccentPink,
+                  Text(
+                      "${queueItems.size} Jobs",
+                      color = AccentPink,
                     fontSize = 12.sp,
                     fontWeight = FontWeight.SemiBold
-                )
-            }
+                  )
+              }
 
-            queueItems.take(8).forEach { item ->
-                DownloadQueueRow(
-                    item = item,
-                    onRetryItem = onRetryItem,
+              Row(
+                  horizontalArrangement = Arrangement.spacedBy(8.dp)
+              ) {
+                  QueueSummaryChip("Aktiv", running + waiting, AccentPink)
+                  QueueSummaryChip("Fehler", failed + cancelled, WarningOrange)
+                  QueueSummaryChip("Fertig", completed, SuccessGreen)
+              }
+
+              Row(
+                  modifier = Modifier.horizontalScroll(rememberScrollState()),
+                  horizontalArrangement = Arrangement.spacedBy(8.dp)
+              ) {
+                  QueueFilterTab.entries.forEach { filter ->
+                      FilterChip(
+                          selected = selectedFilter == filter,
+                          onClick = { selectedFilter = filter },
+                          label = { Text(filter.label) }
+                      )
+                  }
+              }
+
+              Row(
+                  modifier = Modifier.horizontalScroll(rememberScrollState()),
+                  horizontalArrangement = Arrangement.spacedBy(8.dp)
+              ) {
+                  if (failed + cancelled > 0) {
+                      FilledTonalButton(onClick = onRetryFailedItems) {
+                          Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(16.dp))
+                          Spacer(modifier = Modifier.width(6.dp))
+                          Text("Fehler erneut")
+                      }
+                  }
+                  if (running + waiting > 0) {
+                      OutlinedButton(onClick = onCancelActiveItems) {
+                          Icon(Icons.Default.StopCircle, contentDescription = null, modifier = Modifier.size(16.dp))
+                          Spacer(modifier = Modifier.width(6.dp))
+                          Text("Aktive stoppen")
+                      }
+                  }
+                  if (completed > 0) {
+                      OutlinedButton(onClick = onClearFinishedItems) {
+                          Icon(Icons.Default.CleaningServices, contentDescription = null, modifier = Modifier.size(16.dp))
+                          Spacer(modifier = Modifier.width(6.dp))
+                          Text("Fertige aufraeumen")
+                      }
+                  }
+              }
+
+              if (filteredItems.isEmpty()) {
+                  Text(
+                      "Keine Eintraege fuer diesen Filter",
+                      color = TextSecondary,
+                      fontSize = 12.sp
+                  )
+              }
+
+              filteredItems.forEach { item ->
+                  DownloadQueueRow(
+                      item = item,
+                      onRetryItem = onRetryItem,
                     onCancelItem = onCancelItem
                 )
             }
+        }
+      }
+  }
+
+@Composable
+private fun QueueSummaryChip(
+    label: String,
+    count: Int,
+    accent: Color
+) {
+    Surface(
+        shape = RoundedCornerShape(999.dp),
+        color = accent.copy(alpha = 0.14f)
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(8.dp)
+                    .clip(CircleShape)
+                    .background(accent)
+            )
+            Text("$label $count", color = TextPrimary, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
         }
     }
 }
@@ -2721,16 +2829,25 @@ private fun DownloadQueueRow(
                     .clip(CircleShape)
                     .background(accent)
             )
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    item.label,
+              Column(modifier = Modifier.weight(1f)) {
+                  Text(
+                      item.label,
                     color = TextPrimary,
                     fontSize = 13.sp,
                     maxLines = 2,
                     overflow = TextOverflow.Ellipsis
-                )
-                Text(statusLabel, color = accent, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
-            }
+                  )
+                  Text(statusLabel, color = accent, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+                  item.outputPath.takeIf { it.isNotBlank() }?.let { outputPath ->
+                      Text(
+                          outputPath.substringAfterLast('/').substringAfterLast('\\'),
+                          color = TextSecondary,
+                          fontSize = 11.sp,
+                          maxLines = 1,
+                          overflow = TextOverflow.Ellipsis
+                      )
+                  }
+              }
             when (item.status) {
                 DownloadQueueStatus.FAILED, DownloadQueueStatus.CANCELLED -> {
                     TextButton(onClick = { onRetryItem(item) }) {

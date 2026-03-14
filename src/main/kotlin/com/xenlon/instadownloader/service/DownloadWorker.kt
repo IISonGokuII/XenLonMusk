@@ -107,6 +107,13 @@ class DownloadWorker(
             return runCatching { json.decodeFromString<QueuePayload>(raw) }.getOrNull()
         }
 
+        fun removeQueuePayload(context: Context, workId: String) {
+            context.getSharedPreferences(QUEUE_PREFS, Context.MODE_PRIVATE)
+                .edit()
+                .remove(workId)
+                .apply()
+        }
+
         private fun persistQueuePayload(context: Context, workId: String, payload: QueuePayload) {
             context.getSharedPreferences(QUEUE_PREFS, Context.MODE_PRIVATE)
                 .edit()
