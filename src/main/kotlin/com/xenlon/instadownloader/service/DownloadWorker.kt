@@ -6,9 +6,13 @@ import android.content.Context
 import android.os.Build
 import androidx.core.app.NotificationCompat
 import androidx.work.*
+import com.xenlon.instadownloader.model.DownloadResult
+import com.xenlon.instadownloader.model.DownloadedMediaMetadata
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
-import java.io.File
+import kotlinx.serialization.decodeFromString
+import kotlinx.serialization.encodeToString
+import kotlinx.serialization.json.Json
 
 /**
  * WorkManager worker for background downloads with notification progress.
@@ -25,6 +29,9 @@ class DownloadWorker(
         const val KEY_DOWNLOAD_URL = "download_url"
         const val KEY_OUTPUT_PATH = "output_path"
         const val KEY_LABEL = "label"
+        const val KEY_METADATA = "metadata"
+        private const val UNIQUE_QUEUE_NAME = "insta_download_queue"
+        private val json = Json { ignoreUnknownKeys = true }
 
         fun createNotificationChannel(context: Context) {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -45,14 +52,16 @@ class DownloadWorker(
             context: Context,
             url: String,
             outputPath: String,
-            label: String
+            label: String,
+            metadata: DownloadedMediaMetadata? = null,
         ): java.util.UUID {
             createNotificationChannel(context)
 
             val data = workDataOf(
                 KEY_DOWNLOAD_URL to url,
                 KEY_OUTPUT_PATH to outputPath,
-                KEY_LABEL to label
+                KEY_LABEL to label,
+                KEY_METADATA to metadata?.let { json.encodeToString(it) }.orEmpty(),
             )
 
             val request = OneTimeWorkRequestBuilder<DownloadWorker>()
@@ -62,9 +71,12 @@ class DownloadWorker(
                         .setRequiredNetworkType(NetworkType.CONNECTED)
                         .build()
                 )
+                .addTag(UNIQUE_QUEUE_NAME)
                 .build()
 
-            WorkManager.getInstance(context).enqueue(request)
+            WorkManager.getInstance(context)
+                .beginUniqueWork(UNIQUE_QUEUE_NAME, ExistingWorkPolicy.APPEND_OR_REPLACE, request)
+                .enqueue()
             return request.id
         }
     }
@@ -73,17 +85,21 @@ class DownloadWorker(
         val url = inputData.getString(KEY_DOWNLOAD_URL) ?: return@withContext Result.failure()
         val outputPath = inputData.getString(KEY_OUTPUT_PATH) ?: return@withContext Result.failure()
         val label = inputData.getString(KEY_LABEL) ?: "Download"
+        val metadata = inputData.getString(KEY_METADATA)
+            ?.takeIf { it.isNotBlank() }
+            ?.let { runCatching { json.decodeFromString<DownloadedMediaMetadata>(it) }.getOrNull() }
 
         try {
             // Show progress notification
             setForeground(createForegroundInfo(label, 0))
 
-            val service = InstagramService()
+            val service = InstagramService(applicationContext)
             val result = service.downloadFile(url, outputPath)
             service.close()
 
             when (result) {
-                is com.xenlon.instadownloader.model.DownloadResult.Success -> {
+                is DownloadResult.Success -> {
+                    metadata?.let { writeMetadata(outputPath, it) }
                     showCompleteNotification(label)
                     Result.success(workDataOf("output_path" to outputPath))
                 }
@@ -135,5 +151,14 @@ class DownloadWorker(
 
         val manager = applicationContext.getSystemService(NotificationManager::class.java)
         manager.notify(NOTIFICATION_ID + 2, notification)
+    }
+
+    private fun writeMetadata(filePath: String, metadata: DownloadedMediaMetadata) {
+        runCatching {
+            java.io.File("$filePath.meta.json").apply {
+                parentFile?.mkdirs()
+                writeText(json.encodeToString(metadata))
+            }
+        }
     }
 }

@@ -49,6 +49,13 @@ class DownloadManager(
     private val metadataJson = Json { ignoreUnknownKeys = true }
     var onlyNewDownloads: Boolean = true
 
+    private data class QueuedDownloadTask(
+        val url: String,
+        val outputPath: String,
+        val label: String,
+        val metadata: DownloadedMediaMetadata,
+    )
+
     init {
         appContext?.let { context ->
             DownloadForegroundService.createChannel(context)
@@ -135,30 +142,22 @@ class DownloadManager(
             return DownloadResult.Success(outputPath)
         }
 
-        var result = instagramService.downloadFile(url, outputPath)
+        val task = QueuedDownloadTask(
+            url = url,
+            outputPath = outputPath,
+            label = "Profilbild von ${profile.username}",
+            metadata = DownloadedMediaMetadata(
+                username = profile.username,
+                category = "profile",
+                isVideo = false,
+            ),
+        )
 
-        if (result is DownloadResult.Error && hdUrl.isNotEmpty() && sdUrl.isNotEmpty() && hdUrl != sdUrl) {
-            result = instagramService.downloadFile(sdUrl, outputPath)
+        return when (val queued = enqueueTasks(listOf(task), "Profilbild")) {
+            is DownloadResult.Success -> DownloadResult.Success(outputPath)
+            is DownloadResult.Error -> DownloadResult.Error(queued.message, queued.code)
+            else -> DownloadResult.Error("Profilbild konnte nicht zur Queue hinzugefuegt werden")
         }
-
-        if (result is DownloadResult.Success) {
-            writeMetadata(
-                filePath = result.data,
-                metadata = DownloadedMediaMetadata(
-                    username = profile.username,
-                    category = "profile",
-                    isVideo = false,
-                ),
-            )
-        }
-
-        _downloadProgress.value = when (result) {
-            is DownloadResult.Success -> DownloadProgress.Complete(1, "Profilbild")
-            is DownloadResult.Error -> DownloadProgress.Error(result.message)
-            else -> DownloadProgress.Idle
-        }
-
-        return result
     }
 
     /**
@@ -179,9 +178,8 @@ class DownloadManager(
         val total = storyItems.size
         var skippedCount = 0
 
+        val queuedTasks = mutableListOf<QueuedDownloadTask>()
         storyItems.forEachIndexed { index, story ->
-            _downloadProgress.value = DownloadProgress.Downloading(index, total, "Story ${index + 1}/$total")
-
             val extension = DownloadFilePlanner.mediaExtension(
                 story.mediaUrl,
                 treatAsVideo = story.type == MediaType.VIDEO,
@@ -202,24 +200,20 @@ class DownloadManager(
                 skippedCount++
                 return@forEachIndexed
             }
-
-            when (val result = instagramService.downloadFile(story.mediaUrl, outputPath)) {
-                is DownloadResult.Success -> {
-                    downloadedFiles.add(result.data)
-                    existingAdd(existingIndex, result.data, metadata)
-                    writeMetadata(
-                        filePath = result.data,
-                        metadata = metadata,
-                    )
-                }
-                is DownloadResult.Error -> {}
-                else -> {}
-            }
+            existingAdd(existingIndex, outputPath, metadata)
+            queuedTasks.add(
+                QueuedDownloadTask(
+                    url = story.mediaUrl,
+                    outputPath = outputPath,
+                    label = "Story ${index + 1}/$total von ${profile.username}",
+                    metadata = metadata,
+                )
+            )
+            downloadedFiles.add(outputPath)
         }
 
-        val completeLabel = if (skippedCount > 0) "Stories, $skippedCount bereits vorhanden" else "Stories"
-        _downloadProgress.value = DownloadProgress.Complete(downloadedFiles.size, completeLabel)
-        return DownloadResult.Success(downloadedFiles)
+        val queueLabel = if (skippedCount > 0) "Stories, $skippedCount bereits vorhanden" else "Stories"
+        return enqueueTasks(queuedTasks, queueLabel, downloadedFiles)
     }
 
     /**
@@ -250,13 +244,8 @@ class DownloadManager(
         val safeTitle = DownloadFilePlanner.sanitizePathSegment(highlight.title)
         var skippedCount = 0
 
+        val queuedTasks = mutableListOf<QueuedDownloadTask>()
         items.forEachIndexed { index, item ->
-            _downloadProgress.value = DownloadProgress.Downloading(
-                index,
-                total,
-                "Highlight '${highlight.title}' ${index + 1}/$total",
-            )
-
             val extension = DownloadFilePlanner.mediaExtension(
                 item.mediaUrl,
                 treatAsVideo = item.type == MediaType.VIDEO,
@@ -277,19 +266,16 @@ class DownloadManager(
                 skippedCount++
                 return@forEachIndexed
             }
-
-            when (val result = instagramService.downloadFile(item.mediaUrl, outputPath)) {
-                is DownloadResult.Success -> {
-                    downloadedFiles.add(result.data)
-                    existingAdd(existingIndex, result.data, metadata)
-                    writeMetadata(
-                        filePath = result.data,
-                        metadata = metadata,
-                    )
-                }
-                is DownloadResult.Error -> {}
-                else -> {}
-            }
+            existingAdd(existingIndex, outputPath, metadata)
+            queuedTasks.add(
+                QueuedDownloadTask(
+                    url = item.mediaUrl,
+                    outputPath = outputPath,
+                    label = "Highlight ${highlight.title} ${index + 1}/$total",
+                    metadata = metadata,
+                )
+            )
+            downloadedFiles.add(outputPath)
         }
 
         val completeLabel = if (skippedCount > 0) {
@@ -297,8 +283,7 @@ class DownloadManager(
         } else {
             "Highlight '${highlight.title}'"
         }
-        _downloadProgress.value = DownloadProgress.Complete(downloadedFiles.size, completeLabel)
-        return DownloadResult.Success(downloadedFiles)
+        return enqueueTasks(queuedTasks, completeLabel, downloadedFiles)
     }
 
     /**
@@ -587,6 +572,7 @@ class DownloadManager(
         }
 
         val downloadedFiles = mutableListOf<String>()
+        val queuedTasks = mutableListOf<QueuedDownloadTask>()
         val existingIndex = buildExistingIndex(downloadDir)
         val totalMedia = posts.sumOf { it.mediaUrls.size }
         var currentItem = 0
@@ -597,12 +583,6 @@ class DownloadManager(
 
             post.mediaUrls.forEachIndexed { mediaIndex, url ->
                 currentItem++
-                _downloadProgress.value = DownloadProgress.Downloading(
-                    currentItem,
-                    totalMedia,
-                    progressLabel(currentItem, totalMedia),
-                )
-
                 val treatAsVideo = post.type == MediaType.VIDEO && post.mediaUrls.size == 1
                 val extension = DownloadFilePlanner.mediaExtension(url, treatAsVideo)
                 val plannedPath = outputPath(post, mediaIndex, extension, timestamp)
@@ -613,18 +593,16 @@ class DownloadManager(
                     return@forEachIndexed
                 }
 
-                when (val result = instagramService.downloadFile(url, plannedPath)) {
-                    is DownloadResult.Success -> {
-                        downloadedFiles.add(result.data)
-                        existingAdd(existingIndex, result.data, metadata)
-                        writeMetadata(
-                            filePath = result.data,
-                            metadata = metadata,
-                        )
-                    }
-                    is DownloadResult.Error -> {}
-                    else -> {}
-                }
+                existingAdd(existingIndex, plannedPath, metadata)
+                downloadedFiles.add(plannedPath)
+                queuedTasks.add(
+                    QueuedDownloadTask(
+                        url = url,
+                        outputPath = plannedPath,
+                        label = progressLabel(currentItem, totalMedia),
+                        metadata = metadata,
+                    )
+                )
             }
         }
 
@@ -633,8 +611,7 @@ class DownloadManager(
         } else {
             completeLabel
         }
-        _downloadProgress.value = DownloadProgress.Complete(downloadedFiles.size, completionLabel)
-        return DownloadResult.Success(downloadedFiles)
+        return enqueueTasks(queuedTasks, completionLabel, downloadedFiles)
     }
 
     private fun writeMetadata(filePath: String, metadata: DownloadedMediaMetadata) {
@@ -643,6 +620,36 @@ class DownloadManager(
             metadataFile.parentFile?.mkdirs()
             metadataFile.writeText(metadataJson.encodeToString(metadata))
         }
+    }
+
+    private fun enqueueTasks(
+        tasks: List<QueuedDownloadTask>,
+        label: String,
+        outputPaths: List<String> = tasks.map { it.outputPath },
+    ): DownloadResult<List<String>> {
+        if (tasks.isEmpty()) {
+            _downloadProgress.value = DownloadProgress.Complete(0, "$label - nichts neu")
+            return DownloadResult.Success(outputPaths)
+        }
+
+        val context = appContext
+        if (context == null) {
+            _downloadProgress.value = DownloadProgress.Error("Queue nicht verfuegbar")
+            return DownloadResult.Error("Queue nicht verfuegbar")
+        }
+
+        tasks.forEach { task ->
+            DownloadWorker.enqueueDownload(
+                context = context,
+                url = task.url,
+                outputPath = task.outputPath,
+                label = task.label,
+                metadata = task.metadata,
+            )
+        }
+
+        _downloadProgress.value = DownloadProgress.Complete(tasks.size, "$label zur Queue hinzugefuegt")
+        return DownloadResult.Success(outputPaths)
     }
 
     private fun buildExistingIndex(downloadDir: String): ExistingDownloadIndex {
