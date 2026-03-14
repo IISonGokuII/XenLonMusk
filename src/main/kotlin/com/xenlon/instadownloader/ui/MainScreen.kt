@@ -5,6 +5,8 @@ import androidx.compose.foundation.*
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -25,6 +27,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Dialog
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
 import com.xenlon.instadownloader.model.*
@@ -32,17 +35,35 @@ import com.xenlon.instadownloader.service.DownloadProgress
 
 private data class ProfilePreviewItem(
     val id: String,
+    val sourceId: String,
     val imageUrl: String,
     val title: String,
     val subtitle: String,
     val category: String,
     val isVideo: Boolean = false,
+    val caption: String = "",
+    val timestampMillis: Long = 0L,
+    val mediaCount: Int = 1,
+    val likeCount: Long = 0L,
+    val commentCount: Long = 0L,
+    val actionLabel: String = "Jetzt herunterladen",
 )
 
 private data class ProfilePreviewTab(
     val label: String,
     val count: Int,
 )
+
+private data class ContentSectionTab(
+    val id: String,
+    val label: String,
+)
+
+private enum class ContentSortMode(val label: String) {
+    NEWEST("Neueste"),
+    OLDEST("Aelteste"),
+    MOST_LIKED("Top")
+}
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -61,6 +82,7 @@ fun MainScreen(
     isOwnProfile: Boolean = false,
     searchHistory: List<SearchHistoryEntry> = emptyList(),
     downloadQuality: DownloadQuality = DownloadQuality.HD,
+    downloadOnlyNew: Boolean = true,
     clipboardUrl: String? = null,
     requestHealth: RequestHealthState = RequestHealthState(),
     isSearchLoading: Boolean = false,
@@ -80,6 +102,8 @@ fun MainScreen(
     onToggleFavorite: (SearchHistoryEntry) -> Unit,
     onRemoveFromHistory: (SearchHistoryEntry) -> Unit,
     onToggleQuality: () -> Unit = {},
+    onToggleDownloadOnlyNew: () -> Unit = {},
+    onDownloadPreviewItem: (category: String, sourceId: String) -> Unit = { _, _ -> },
     onHandleClipboardUrl: () -> Unit = {},
     onDismissClipboardUrl: () -> Unit = {},
     onLogout: () -> Unit,
@@ -87,6 +111,8 @@ fun MainScreen(
 ) {
     var searchQuery by remember { mutableStateOf("") }
     var profileSearchQuery by remember(profile?.username) { mutableStateOf("") }
+    var selectedSectionTab by remember(profile?.username) { mutableStateOf("posts") }
+    var contentSortMode by remember(profile?.username) { mutableStateOf(ContentSortMode.NEWEST) }
 
     Column(
         modifier = Modifier
@@ -264,6 +290,48 @@ fun MainScreen(
                 }
             }
 
+            Card(
+                shape = RoundedCornerShape(14.dp),
+                colors = CardDefaults.cardColors(containerColor = DarkSurface)
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    Icon(
+                        Icons.Default.Update,
+                        contentDescription = null,
+                        tint = if (downloadOnlyNew) SuccessGreen else WarningOrange,
+                        modifier = Modifier.size(20.dp)
+                    )
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            "Nur neue Inhalte herunterladen",
+                            color = TextPrimary,
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                        Text(
+                            if (downloadOnlyNew) {
+                                "Bereits bekannte Dateien werden anhand von Pfad und Metadaten uebersprungen."
+                            } else {
+                                "Auch vorhandene Inhalte koennen erneut geladen werden."
+                            },
+                            color = TextSecondary,
+                            fontSize = 12.sp,
+                            lineHeight = 16.sp
+                        )
+                    }
+                    Switch(
+                        checked = downloadOnlyNew,
+                        onCheckedChange = { onToggleDownloadOnlyNew() }
+                    )
+                }
+            }
+
             // Search bar
             SearchBar(
                 query = searchQuery,
@@ -319,88 +387,127 @@ fun MainScreen(
 
                 ProfileExplorerCard(
                     profile = profile,
+                    stories = stories.sortStoriesResult(contentSortMode),
+                    highlights = highlights.sortHighlightsResult(contentSortMode),
+                    feedPosts = feedPosts.sortFeedPostsResult(contentSortMode),
+                    reels = reels.sortNullableFeedPostsResult(contentSortMode),
+                    taggedPosts = taggedPosts.sortNullableFeedPostsResult(contentSortMode),
+                    archivedPosts = archivedPosts.sortNullableFeedPostsResult(contentSortMode),
+                    savedPosts = savedPosts.sortNullableFeedPostsResult(contentSortMode),
+                    query = profileSearchQuery,
+                    onQueryChange = { profileSearchQuery = it },
+                    onDownloadItem = onDownloadPreviewItem
+                )
+
+                ContentOverviewCard(
                     stories = stories,
                     highlights = highlights,
                     feedPosts = feedPosts,
                     reels = reels,
                     taggedPosts = taggedPosts,
                     archivedPosts = archivedPosts,
-                    savedPosts = savedPosts,
-                    query = profileSearchQuery,
-                    onQueryChange = { profileSearchQuery = it }
+                    savedPosts = savedPosts
                 )
 
-                // Stories section
-                if (isAnonymousMode) {
-                    AnonymousLimitCard(
-                        title = "Stories",
-                        icon = Icons.Default.AutoStories,
-                        gradientColors = listOf(InstagramPink, InstagramOrange)
-                    )
-                } else {
-                    StoriesSection(
-                        stories = stories,
-                        onDownloadStories = onDownloadStories
-                    )
+                val contentTabs = buildList {
+                    add(ContentSectionTab("posts", "Posts ${feedPosts.feedResultCount()}"))
+                    add(ContentSectionTab("reels", "Reels ${reels.feedResultCount()}"))
+                    add(ContentSectionTab("stories", "Stories ${stories.storyResultCount()}"))
+                    add(ContentSectionTab("highlights", "Highlights ${highlights.highlightResultCount()}"))
+                    if (!isAnonymousMode && taggedPosts != null) add(ContentSectionTab("tagged", "Markiert ${taggedPosts.feedResultCount()}"))
+                    if (isOwnProfile && archivedPosts != null) add(ContentSectionTab("archive", "Archiv ${archivedPosts.feedResultCount()}"))
+                    if (isOwnProfile && savedPosts != null) add(ContentSectionTab("saved", "Gespeichert ${savedPosts.feedResultCount()}"))
                 }
 
-                // Highlights section
-                if (isAnonymousMode) {
-                    AnonymousLimitCard(
-                        title = "Highlights",
-                        icon = Icons.Default.Stars,
-                        gradientColors = listOf(InstagramPurple, InstagramPink)
-                    )
-                } else {
-                    HighlightsSection(
-                        highlights = highlights,
-                        onDownloadHighlight = onDownloadHighlight,
-                        onDownloadAllHighlights = onDownloadAllHighlights
-                    )
+                if (contentTabs.none { it.id == selectedSectionTab }) {
+                    selectedSectionTab = contentTabs.firstOrNull()?.id ?: "posts"
                 }
 
-                // Reels section
-                if (!isAnonymousMode && reels != null) {
-                    ReelsSection(
-                        reels = reels,
-                        onDownloadReels = onDownloadReels
-                    )
-                } else if (isAnonymousMode) {
-                    AnonymousLimitCard(
-                        title = "Reels",
-                        icon = Icons.Default.VideoLibrary,
-                        gradientColors = listOf(Color(0xFFE040FB), Color(0xFFFF4081))
-                    )
-                }
-
-                // Feed posts section (works in both modes)
-                FeedPostsSection(
-                    feedPosts = feedPosts,
-                    onDownloadPosts = onDownloadFeedPosts
+                ProfileSectionsTabBar(
+                    tabs = contentTabs,
+                    selectedTab = selectedSectionTab,
+                    onSelect = { selectedSectionTab = it }
                 )
 
-                // Tagged posts section
-                if (!isAnonymousMode && taggedPosts != null) {
-                    TaggedPostsSection(
-                        taggedPosts = taggedPosts,
-                        onDownloadTagged = onDownloadTaggedPosts
-                    )
-                }
+                ContentSortBar(
+                    selectedMode = contentSortMode,
+                    onSelect = { contentSortMode = it }
+                )
 
-                // Archived posts section (only for own profile when logged in)
-                if (isOwnProfile && archivedPosts != null) {
-                    ArchivedPostsSection(
-                        archivedPosts = archivedPosts,
-                        onDownloadArchive = onDownloadArchivedPosts
-                    )
-                }
-
-                // Saved posts section (only for own profile)
-                if (isOwnProfile && savedPosts != null) {
-                    SavedPostsSection(
-                        savedPosts = savedPosts,
-                        onDownloadSaved = onDownloadSavedPosts
-                    )
+                when (selectedSectionTab) {
+                    "stories" -> {
+                        if (isAnonymousMode) {
+                            AnonymousLimitCard(
+                                title = "Stories",
+                                icon = Icons.Default.AutoStories,
+                                gradientColors = listOf(InstagramPink, InstagramOrange)
+                            )
+                        } else {
+                            StoriesSection(
+                                stories = stories.sortStoriesResult(contentSortMode),
+                                onDownloadStories = onDownloadStories
+                            )
+                        }
+                    }
+                    "highlights" -> {
+                        if (isAnonymousMode) {
+                            AnonymousLimitCard(
+                                title = "Highlights",
+                                icon = Icons.Default.Stars,
+                                gradientColors = listOf(InstagramPurple, InstagramPink)
+                            )
+                        } else {
+                            HighlightsSection(
+                                highlights = highlights.sortHighlightsResult(contentSortMode),
+                                onDownloadHighlight = onDownloadHighlight,
+                                onDownloadAllHighlights = onDownloadAllHighlights
+                            )
+                        }
+                    }
+                    "reels" -> {
+                        if (!isAnonymousMode && reels != null) {
+                            ReelsSection(
+                                reels = reels.sortFeedPostsResult(contentSortMode),
+                                onDownloadReels = onDownloadReels
+                            )
+                        } else {
+                            AnonymousLimitCard(
+                                title = "Reels",
+                                icon = Icons.Default.VideoLibrary,
+                                gradientColors = listOf(Color(0xFFE040FB), Color(0xFFFF4081))
+                            )
+                        }
+                    }
+                    "tagged" -> {
+                        if (!isAnonymousMode && taggedPosts != null) {
+                            TaggedPostsSection(
+                                taggedPosts = taggedPosts.sortFeedPostsResult(contentSortMode),
+                                onDownloadTagged = onDownloadTaggedPosts
+                            )
+                        }
+                    }
+                    "archive" -> {
+                        if (isOwnProfile && archivedPosts != null) {
+                            ArchivedPostsSection(
+                                archivedPosts = archivedPosts.sortFeedPostsResult(contentSortMode),
+                                onDownloadArchive = onDownloadArchivedPosts
+                            )
+                        }
+                    }
+                    "saved" -> {
+                        if (isOwnProfile && savedPosts != null) {
+                            SavedPostsSection(
+                                savedPosts = savedPosts.sortFeedPostsResult(contentSortMode),
+                                onDownloadSaved = onDownloadSavedPosts
+                            )
+                        }
+                    }
+                    else -> {
+                        FeedPostsSection(
+                            feedPosts = feedPosts.sortFeedPostsResult(contentSortMode),
+                            onDownloadPosts = onDownloadFeedPosts
+                        )
+                    }
                 }
             } else if (!isSearchLoading && searchError == null) {
                 // Welcome card
@@ -465,6 +572,144 @@ private fun RequestHealthBanner(requestHealth: RequestHealthState) {
                     fontSize = 11.sp
                 )
             }
+        }
+    }
+}
+
+@Composable
+private fun ProfileSectionsTabBar(
+    tabs: List<ContentSectionTab>,
+    selectedTab: String,
+    onSelect: (String) -> Unit
+) {
+    if (tabs.isEmpty()) return
+
+    Card(
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(containerColor = DarkSurface)
+    ) {
+        ScrollableTabRow(
+            selectedTabIndex = tabs.indexOfFirst { it.id == selectedTab }.coerceAtLeast(0),
+            containerColor = Color.Transparent,
+            edgePadding = 0.dp,
+            divider = {}
+        ) {
+            tabs.forEach { tab ->
+                Tab(
+                    selected = selectedTab == tab.id,
+                    onClick = { onSelect(tab.id) },
+                    text = {
+                        Text(
+                            tab.label,
+                            maxLines = 1,
+                            fontWeight = if (selectedTab == tab.id) FontWeight.Bold else FontWeight.Medium
+                        )
+                    }
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun ContentSortBar(
+    selectedMode: ContentSortMode,
+    onSelect: (ContentSortMode) -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .horizontalScroll(rememberScrollState()),
+        horizontalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        ContentSortMode.entries.forEach { mode ->
+            FilterChip(
+                selected = selectedMode == mode,
+                onClick = { onSelect(mode) },
+                label = { Text(mode.label) },
+                colors = FilterChipDefaults.filterChipColors(
+                    selectedContainerColor = AccentPink,
+                    selectedLabelColor = Color.White,
+                    containerColor = DarkSurface,
+                    labelColor = TextSecondary
+                )
+            )
+        }
+    }
+}
+
+@Composable
+private fun ContentOverviewCard(
+    stories: DownloadResult<List<StoryItem>>,
+    highlights: DownloadResult<List<HighlightReel>>,
+    feedPosts: DownloadResult<List<FeedPost>>,
+    reels: DownloadResult<List<FeedPost>>?,
+    taggedPosts: DownloadResult<List<FeedPost>>?,
+    archivedPosts: DownloadResult<List<FeedPost>>?,
+    savedPosts: DownloadResult<List<FeedPost>>?,
+) {
+    val items = listOf(
+        Triple("Posts", feedPosts.feedResultCount(), feedPosts.feedStateLabel()),
+        Triple("Reels", reels.feedResultCount(), reels.feedStateLabel()),
+        Triple("Stories", stories.storyResultCount(), stories.storyStateLabel()),
+        Triple("Highlights", highlights.highlightResultCount(), highlights.highlightStateLabel()),
+        Triple("Markiert", taggedPosts.feedResultCount(), taggedPosts.feedStateLabel()),
+        Triple("Archiv", archivedPosts.feedResultCount(), archivedPosts.feedStateLabel()),
+        Triple("Gespeichert", savedPosts.feedResultCount(), savedPosts.feedStateLabel()),
+    ).filterNot { it.first in listOf("Markiert", "Archiv", "Gespeichert") && it.third == "Aus" }
+
+    Card(
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(containerColor = DarkSurface)
+    ) {
+        Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Text(
+                "Inhaltsstatus",
+                color = TextPrimary,
+                fontSize = 15.sp,
+                fontWeight = FontWeight.SemiBold
+            )
+            items.chunked(2).forEach { row ->
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    row.forEach { (label, count, state) ->
+                        StatusMetricTile(
+                            title = label,
+                            value = count.toString(),
+                            status = state,
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
+                    repeat(2 - row.size) {
+                        Spacer(modifier = Modifier.weight(1f))
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun StatusMetricTile(
+    title: String,
+    value: String,
+    status: String,
+    modifier: Modifier = Modifier
+) {
+    Card(
+        modifier = modifier,
+        shape = RoundedCornerShape(14.dp),
+        colors = CardDefaults.cardColors(containerColor = DarkSurfaceVariant)
+    ) {
+        Column(
+            modifier = Modifier.padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp)
+        ) {
+            Text(title, color = TextSecondary, fontSize = 12.sp)
+            Text(value, color = TextPrimary, fontSize = 20.sp, fontWeight = FontWeight.Bold)
+            Text(status, color = AccentPink, fontSize = 11.sp)
         }
     }
 }
@@ -850,9 +1095,11 @@ private fun ProfileExplorerCard(
     savedPosts: DownloadResult<List<FeedPost>>?,
     query: String,
     onQueryChange: (String) -> Unit,
+    onDownloadItem: (category: String, sourceId: String) -> Unit,
 ) {
     val normalizedQuery = query.trim().lowercase()
     var selectedTab by remember(profile.username) { mutableStateOf("Alle") }
+    var viewerStartIndex by remember(profile.username) { mutableIntStateOf(-1) }
     val previewItems = remember(
         profile.username,
         stories,
@@ -870,11 +1117,14 @@ private fun ProfileExplorerCard(
                     add(
                         ProfilePreviewItem(
                             id = "story-${story.id}",
+                            sourceId = story.id,
                             imageUrl = story.thumbnailUrl.ifEmpty { story.mediaUrl },
                             title = "Story",
                             subtitle = formatPreviewTimestamp(story.timestamp * 1000L),
                             category = "Stories",
                             isVideo = story.type == MediaType.VIDEO,
+                            timestampMillis = story.timestamp * 1000L,
+                            actionLabel = "Story herunterladen",
                         )
                     )
                 }
@@ -884,10 +1134,13 @@ private fun ProfileExplorerCard(
                     add(
                         ProfilePreviewItem(
                             id = "highlight-${highlight.id}",
+                            sourceId = highlight.id,
                             imageUrl = highlight.coverImageUrl,
                             title = highlight.title,
                             subtitle = "${highlight.items.size} Elemente",
                             category = "Highlights",
+                            mediaCount = highlight.items.size.coerceAtLeast(1),
+                            actionLabel = "Highlight herunterladen",
                         )
                     )
                 }
@@ -925,6 +1178,15 @@ private fun ProfileExplorerCard(
 
     val visibleItems = remember(previewItems, selectedTab) {
         if (selectedTab == "Alle") previewItems else previewItems.filter { it.category == selectedTab }
+    }
+
+    if (viewerStartIndex >= 0 && visibleItems.isNotEmpty()) {
+        ProfilePreviewViewer(
+            items = visibleItems,
+            startIndex = viewerStartIndex,
+            onDismiss = { viewerStartIndex = -1 },
+            onDownloadItem = onDownloadItem
+        )
     }
 
     SectionCard(
@@ -1012,7 +1274,10 @@ private fun ProfileExplorerCard(
                         rowItems.forEach { item ->
                             ProfileGridTile(
                                 item = item,
-                                modifier = Modifier.weight(1f)
+                                modifier = Modifier.weight(1f),
+                                onClick = {
+                                    viewerStartIndex = visibleItems.indexOf(item)
+                                }
                             )
                         }
                         repeat(3 - rowItems.size) {
@@ -1021,6 +1286,7 @@ private fun ProfileExplorerCard(
                     }
                 }
             }
+
         }
     }
 }
@@ -1030,11 +1296,24 @@ private fun DownloadResult<List<FeedPost>>?.toPreviewItems(category: String): Li
     return posts.map { post ->
         ProfilePreviewItem(
             id = "$category-${post.id}",
+            sourceId = post.id,
             imageUrl = post.thumbnailUrl.ifEmpty { post.mediaUrls.firstOrNull().orEmpty() },
             title = post.caption.takeIf { it.isNotBlank() }?.take(48) ?: post.shortcode.ifBlank { "Ohne Caption" },
             subtitle = formatPreviewTimestamp(post.timestamp * 1000L),
             category = category,
-            isVideo = post.type == MediaType.VIDEO
+            isVideo = post.type == MediaType.VIDEO,
+            caption = post.caption,
+            timestampMillis = post.timestamp * 1000L,
+            mediaCount = post.mediaUrls.size.coerceAtLeast(1),
+            likeCount = post.likeCount,
+            commentCount = post.commentCount,
+            actionLabel = when (category) {
+                "Reels" -> "Reel herunterladen"
+                "Markiert" -> "Markierten Post herunterladen"
+                "Archiv" -> "Archivpost herunterladen"
+                "Gespeichert" -> "Gespeicherten Post herunterladen"
+                else -> "Post herunterladen"
+            }
         )
     }
 }
@@ -1103,12 +1382,15 @@ private fun ProfilePreviewCard(item: ProfilePreviewItem) {
 @Composable
 private fun ProfileGridTile(
     item: ProfilePreviewItem,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    onClick: () -> Unit = {}
 ) {
     val context = LocalContext.current
 
     Card(
-        modifier = modifier.aspectRatio(1f),
+        modifier = modifier
+            .aspectRatio(1f)
+            .clickable(onClick = onClick),
         shape = RoundedCornerShape(14.dp),
         colors = CardDefaults.cardColors(containerColor = DarkSurfaceVariant)
     ) {
@@ -1185,6 +1467,212 @@ private fun ProfileGridTile(
                 }
             }
         }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
+@Composable
+private fun ProfilePreviewViewer(
+    items: List<ProfilePreviewItem>,
+    startIndex: Int,
+    onDismiss: () -> Unit,
+    onDownloadItem: (category: String, sourceId: String) -> Unit,
+) {
+    val pagerState = rememberPagerState(initialPage = startIndex) { items.size }
+
+    Dialog(onDismissRequest = onDismiss) {
+        Card(
+            modifier = Modifier
+                .fillMaxWidth()
+                .fillMaxHeight(0.88f),
+            shape = RoundedCornerShape(24.dp),
+            colors = CardDefaults.cardColors(containerColor = Color.Black)
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(Color.Black)
+            ) {
+                TopAppBar(
+                    title = {
+                        val currentItem = items.getOrNull(pagerState.currentPage)
+                        Column {
+                            Text(
+                                currentItem?.title ?: "",
+                                color = Color.White,
+                                fontSize = 14.sp,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                            Text(
+                                "${pagerState.currentPage + 1}/${items.size} · ${currentItem?.category.orEmpty()}",
+                                color = Color.White.copy(alpha = 0.75f),
+                                fontSize = 12.sp
+                            )
+                        }
+                    },
+                    navigationIcon = {
+                        IconButton(onClick = onDismiss) {
+                            Icon(Icons.Default.Close, contentDescription = "Schliessen", tint = Color.White)
+                        }
+                    },
+                    colors = TopAppBarDefaults.topAppBarColors(
+                        containerColor = Color.Black,
+                        titleContentColor = Color.White
+                    )
+                )
+
+                HorizontalPager(
+                    state = pagerState,
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxWidth()
+                ) { page ->
+                    val item = items[page]
+                    ProfilePreviewViewerPage(
+                        item = item,
+                        onDownload = { onDownloadItem(item.category, item.sourceId) }
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ProfilePreviewViewerPage(
+    item: ProfilePreviewItem,
+    onDownload: () -> Unit
+) {
+    val context = LocalContext.current
+
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color.Black)
+    ) {
+        if (item.imageUrl.isNotBlank()) {
+            AsyncImage(
+                model = ImageRequest.Builder(context)
+                    .data(item.imageUrl)
+                    .crossfade(true)
+                    .build(),
+                contentDescription = item.title,
+                modifier = Modifier.fillMaxSize(),
+                contentScale = ContentScale.Fit
+            )
+        }
+
+        Column(
+            modifier = Modifier
+                .align(Alignment.BottomStart)
+                .fillMaxWidth()
+                .background(
+                    Brush.verticalGradient(
+                        colors = listOf(Color.Transparent, Color.Black.copy(alpha = 0.88f))
+                    )
+                )
+                .padding(16.dp)
+        ) {
+            Text(
+                item.category,
+                color = AccentPink,
+                fontSize = 12.sp,
+                fontWeight = FontWeight.SemiBold
+            )
+            Spacer(modifier = Modifier.height(6.dp))
+            Text(
+                item.title,
+                color = Color.White,
+                fontSize = 16.sp,
+                fontWeight = FontWeight.Bold
+            )
+            Spacer(modifier = Modifier.height(4.dp))
+            Text(
+                item.subtitle,
+                color = Color.White.copy(alpha = 0.82f),
+                fontSize = 13.sp
+            )
+            if (item.caption.isNotBlank()) {
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(
+                    item.caption,
+                    color = Color.White.copy(alpha = 0.92f),
+                    fontSize = 13.sp,
+                    lineHeight = 18.sp,
+                    maxLines = 4,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+            Spacer(modifier = Modifier.height(10.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                ViewerStatChip(
+                    icon = if (item.isVideo) Icons.Default.PlayArrow else Icons.Default.Photo,
+                    label = "${item.mediaCount} Datei${if (item.mediaCount != 1) "en" else ""}"
+                )
+                if (item.likeCount > 0) {
+                    ViewerStatChip(
+                        icon = Icons.Default.Favorite,
+                        label = formatCount(item.likeCount)
+                    )
+                }
+                if (item.commentCount > 0) {
+                    ViewerStatChip(
+                        icon = Icons.Default.ChatBubble,
+                        label = formatCount(item.commentCount)
+                    )
+                }
+            }
+            Spacer(modifier = Modifier.height(12.dp))
+            Button(
+                onClick = onDownload,
+                shape = RoundedCornerShape(12.dp),
+                colors = ButtonDefaults.buttonColors(containerColor = AccentPink)
+            ) {
+                Icon(Icons.Default.Download, contentDescription = null, modifier = Modifier.size(18.dp))
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(item.actionLabel, fontWeight = FontWeight.SemiBold)
+            }
+        }
+
+        if (item.isVideo) {
+            Box(
+                modifier = Modifier
+                    .align(Alignment.Center)
+                    .size(64.dp)
+                    .clip(CircleShape)
+                    .background(Color.Black.copy(alpha = 0.65f)),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    Icons.Default.PlayArrow,
+                    contentDescription = null,
+                    tint = Color.White,
+                    modifier = Modifier.size(42.dp)
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun ViewerStatChip(
+    icon: ImageVector,
+    label: String
+) {
+    Row(
+        modifier = Modifier
+            .clip(RoundedCornerShape(999.dp))
+            .background(Color.White.copy(alpha = 0.12f))
+            .padding(horizontal = 10.dp, vertical = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(6.dp)
+    ) {
+        Icon(icon, contentDescription = null, tint = Color.White, modifier = Modifier.size(14.dp))
+        Text(label, color = Color.White, fontSize = 11.sp)
     }
 }
 
@@ -1549,10 +2037,19 @@ private fun ReelsSection(
                     EmptyMessage("Keine Reels vorhanden")
                 } else {
                     Column {
+                        val totalMedia = items.sumOf { it.mediaUrls.size }
+                        val totalLikes = items.sumOf { it.likeCount }
                         Text(
-                            "${items.size} Reel${if (items.size != 1) "s" else ""} gefunden",
+                            "${items.size} Reel${if (items.size != 1) "s" else ""} gefunden · $totalMedia Dateien · ${formatCount(totalLikes)} Likes",
                             color = TextSecondary,
                             fontSize = 14.sp
+                        )
+
+                        Spacer(modifier = Modifier.height(12.dp))
+
+                        PostPreviewStrip(
+                            posts = items,
+                            accent = Color(0xFFE040FB)
                         )
 
                         Spacer(modifier = Modifier.height(12.dp))
@@ -1604,10 +2101,18 @@ private fun TaggedPostsSection(
                 } else {
                     Column {
                         val totalMedia = posts.sumOf { it.mediaUrls.size }
+                        val totalLikes = posts.sumOf { it.likeCount }
                         Text(
-                            "${posts.size} markierte${if (posts.size != 1) " Posts" else "r Post"} ($totalMedia Dateien)",
+                            "${posts.size} markierte${if (posts.size != 1) " Posts" else "r Post"} ($totalMedia Dateien, ${formatCount(totalLikes)} Likes)",
                             color = TextSecondary,
                             fontSize = 14.sp
+                        )
+
+                        Spacer(modifier = Modifier.height(12.dp))
+
+                        PostPreviewStrip(
+                            posts = posts,
+                            accent = Color(0xFF26C6DA)
                         )
 
                         Spacer(modifier = Modifier.height(12.dp))
@@ -1660,10 +2165,18 @@ private fun SavedPostsSection(
                 } else {
                     Column {
                         val totalMedia = posts.sumOf { it.mediaUrls.size }
+                        val totalLikes = posts.sumOf { it.likeCount }
                         Text(
-                            "${posts.size} gespeicherte${if (posts.size != 1) " Posts" else "r Post"} ($totalMedia Dateien)",
+                            "${posts.size} gespeicherte${if (posts.size != 1) " Posts" else "r Post"} ($totalMedia Dateien, ${formatCount(totalLikes)} Likes)",
                             color = TextSecondary,
                             fontSize = 14.sp
+                        )
+
+                        Spacer(modifier = Modifier.height(12.dp))
+
+                        PostPreviewStrip(
+                            posts = posts,
+                            accent = Color(0xFFFFB300)
                         )
 
                         Spacer(modifier = Modifier.height(12.dp))
@@ -1949,6 +2462,13 @@ private fun FeedPostsSection(
 
                         Spacer(modifier = Modifier.height(12.dp))
 
+                        PostPreviewStrip(
+                            posts = posts,
+                            accent = InstagramOrange
+                        )
+
+                        Spacer(modifier = Modifier.height(12.dp))
+
                         Button(
                             onClick = onDownloadPosts,
                             modifier = Modifier.fillMaxWidth(),
@@ -1996,10 +2516,18 @@ private fun ArchivedPostsSection(
                 } else {
                     Column {
                         val totalMedia = posts.sumOf { it.mediaUrls.size }
+                        val totalLikes = posts.sumOf { it.likeCount }
                         Text(
-                            "${posts.size} archivierte${if (posts.size != 1) " Posts" else "r Post"} ($totalMedia Dateien)",
+                            "${posts.size} archivierte${if (posts.size != 1) " Posts" else "r Post"} ($totalMedia Dateien, ${formatCount(totalLikes)} Likes)",
                             color = TextSecondary,
                             fontSize = 14.sp
+                        )
+
+                        Spacer(modifier = Modifier.height(12.dp))
+
+                        PostPreviewStrip(
+                            posts = posts,
+                            accent = Color(0xFF8B5CF6)
                         )
 
                         Spacer(modifier = Modifier.height(12.dp))
@@ -2090,6 +2618,105 @@ private fun formatCount(count: Long): String {
     }
 }
 
+@Composable
+private fun PostPreviewStrip(
+    posts: List<FeedPost>,
+    accent: Color,
+    emptyLabel: String = "Keine Vorschau"
+) {
+    val context = LocalContext.current
+    if (posts.isEmpty()) {
+        Text(emptyLabel, color = TextSecondary, fontSize = 12.sp)
+        return
+    }
+
+    LazyRow(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+        items(posts.take(8), key = { it.id }) { post ->
+            Card(
+                modifier = Modifier.size(92.dp),
+                shape = RoundedCornerShape(14.dp),
+                colors = CardDefaults.cardColors(containerColor = DarkSurfaceVariant)
+            ) {
+                Box(modifier = Modifier.fillMaxSize()) {
+                    AsyncImage(
+                        model = ImageRequest.Builder(context)
+                            .data(post.thumbnailUrl.ifEmpty { post.mediaUrls.firstOrNull().orEmpty() })
+                            .crossfade(true)
+                            .build(),
+                        contentDescription = post.shortcode,
+                        modifier = Modifier.fillMaxSize(),
+                        contentScale = ContentScale.Crop
+                    )
+
+                    if (post.type == MediaType.VIDEO) {
+                        Box(
+                            modifier = Modifier
+                                .align(Alignment.TopEnd)
+                                .padding(6.dp)
+                                .size(20.dp)
+                                .clip(CircleShape)
+                                .background(Color.Black.copy(alpha = 0.65f)),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(Icons.Default.PlayArrow, contentDescription = null, tint = Color.White, modifier = Modifier.size(14.dp))
+                        }
+                    }
+
+                    if (post.isCarousel) {
+                        Box(
+                            modifier = Modifier
+                                .align(Alignment.TopStart)
+                                .padding(6.dp)
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(Color.Black.copy(alpha = 0.68f))
+                                .padding(horizontal = 6.dp, vertical = 3.dp)
+                        ) {
+                            Text("${post.mediaUrls.size}", color = Color.White, fontSize = 10.sp)
+                        }
+                    }
+
+                    Box(
+                        modifier = Modifier
+                            .align(Alignment.BottomStart)
+                            .fillMaxWidth()
+                            .background(
+                                Brush.verticalGradient(
+                                    colors = listOf(Color.Transparent, Color.Black.copy(alpha = 0.78f))
+                                )
+                            )
+                            .padding(8.dp)
+                    ) {
+                        Text(
+                            text = post.caption.takeIf { it.isNotBlank() }?.take(28)
+                                ?: post.shortcode.ifBlank { formatPreviewTimestamp(post.timestamp * 1000L) },
+                            color = Color.White,
+                            fontSize = 10.sp,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    Spacer(modifier = Modifier.height(8.dp))
+
+    Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
+        Box(
+            modifier = Modifier
+                .size(10.dp)
+                .clip(CircleShape)
+                .background(accent)
+        )
+        Text(
+            "${posts.take(8).size} Vorschauen sichtbar, sortiert nach aktueller Auswahl",
+            color = TextSecondary,
+            fontSize = 11.sp
+        )
+    }
+}
+
 private fun formatPreviewTimestamp(timestampMillis: Long): String {
     if (timestampMillis <= 0L) return "Kein Datum"
     val now = System.currentTimeMillis()
@@ -2101,4 +2728,73 @@ private fun formatPreviewTimestamp(timestampMillis: Long): String {
         else -> java.text.SimpleDateFormat("dd.MM.yyyy", java.util.Locale.getDefault())
             .format(java.util.Date(timestampMillis))
     }
+}
+
+private fun DownloadResult<List<FeedPost>>?.feedResultCount(): Int = (this as? DownloadResult.Success)?.data?.size ?: 0
+
+private fun DownloadResult<List<StoryItem>>.storyResultCount(): Int = (this as? DownloadResult.Success)?.data?.size ?: 0
+
+private fun DownloadResult<List<HighlightReel>>.highlightResultCount(): Int = (this as? DownloadResult.Success)?.data?.size ?: 0
+
+private fun DownloadResult<List<FeedPost>>?.feedStateLabel(): String = when (this) {
+    null -> "Aus"
+    is DownloadResult.Loading -> "Laedt"
+    is DownloadResult.Error -> "Fehler"
+    is DownloadResult.Success -> if (data.isEmpty()) "Leer" else "Bereit"
+    else -> "Aus"
+}
+
+private fun DownloadResult<List<StoryItem>>.storyStateLabel(): String = when (this) {
+    is DownloadResult.Loading -> "Laedt"
+    is DownloadResult.Error -> "Fehler"
+    is DownloadResult.Success -> if (data.isEmpty()) "Leer" else "Bereit"
+    else -> "Aus"
+}
+
+private fun DownloadResult<List<HighlightReel>>.highlightStateLabel(): String = when (this) {
+    is DownloadResult.Loading -> "Laedt"
+    is DownloadResult.Error -> "Fehler"
+    is DownloadResult.Success -> if (data.isEmpty()) "Leer" else "Bereit"
+    else -> "Aus"
+}
+
+private fun DownloadResult<List<FeedPost>>.sortFeedPostsResult(mode: ContentSortMode): DownloadResult<List<FeedPost>> {
+    val data = (this as? DownloadResult.Success)?.data ?: return this
+    val sorted = sortFeedPosts(data, mode)
+    return DownloadResult.Success(sorted)
+}
+
+private fun DownloadResult<List<FeedPost>>?.sortNullableFeedPostsResult(mode: ContentSortMode): DownloadResult<List<FeedPost>>? {
+    val data = (this as? DownloadResult.Success)?.data ?: return this
+    val sorted = sortFeedPosts(data, mode)
+    return DownloadResult.Success(sorted)
+}
+
+private fun DownloadResult<List<StoryItem>>.sortStoriesResult(mode: ContentSortMode): DownloadResult<List<StoryItem>> {
+    val data = (this as? DownloadResult.Success)?.data ?: return this
+    val sorted = when (mode) {
+        ContentSortMode.OLDEST -> data.sortedBy { it.timestamp }
+        else -> data.sortedByDescending { it.timestamp }
+    }
+    return DownloadResult.Success(sorted)
+}
+
+private fun DownloadResult<List<HighlightReel>>.sortHighlightsResult(mode: ContentSortMode): DownloadResult<List<HighlightReel>> {
+    val data = (this as? DownloadResult.Success)?.data ?: return this
+    val sorted = when (mode) {
+        ContentSortMode.OLDEST -> data.sortedBy { it.title.lowercase() }
+        ContentSortMode.MOST_LIKED -> data.sortedByDescending { it.items.size }
+        ContentSortMode.NEWEST -> data.sortedByDescending { highlight ->
+            highlight.items.maxOfOrNull { it.timestamp } ?: 0L
+        }
+    }
+    return DownloadResult.Success(sorted)
+}
+
+private fun sortFeedPosts(posts: List<FeedPost>, mode: ContentSortMode): List<FeedPost> = when (mode) {
+    ContentSortMode.NEWEST -> posts.sortedByDescending { it.timestamp }
+    ContentSortMode.OLDEST -> posts.sortedBy { it.timestamp }
+    ContentSortMode.MOST_LIKED -> posts.sortedWith(
+        compareByDescending<FeedPost> { it.likeCount }.thenByDescending { it.timestamp }
+    )
 }

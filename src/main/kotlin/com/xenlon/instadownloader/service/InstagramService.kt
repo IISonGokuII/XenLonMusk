@@ -58,6 +58,26 @@ class InstagramService {
     private val _requestHealth = MutableStateFlow(RequestHealthState())
     val requestHealth: StateFlow<RequestHealthState> = _requestHealth.asStateFlow()
 
+    private fun JsonElement?.asObjectOrNull(): JsonObject? = this as? JsonObject
+
+    private fun JsonElement?.asArrayOrNull(): JsonArray? = this as? JsonArray
+
+    private fun JsonElement?.stringOrNull(): String? = (this as? JsonPrimitive)?.contentOrNull
+
+    private fun JsonElement?.longOrNull(): Long? = (this as? JsonPrimitive)?.longOrNull
+
+    private fun JsonElement?.booleanOrNull(): Boolean? = (this as? JsonPrimitive)?.booleanOrNull
+
+    private fun JsonObject.objectAt(key: String): JsonObject? = this[key].asObjectOrNull()
+
+    private fun JsonObject.arrayAt(key: String): JsonArray? = this[key].asArrayOrNull()
+
+    private fun JsonObject.stringAt(key: String): String? = this[key].stringOrNull()
+
+    private fun JsonObject.longAt(key: String): Long? = this[key].longOrNull()
+
+    private fun JsonObject.booleanAt(key: String): Boolean? = this[key].booleanOrNull()
+
     /**
      * Picks the best image URL from a candidates array based on quality preference.
      * HD = first (largest), SD = last (smallest).
@@ -65,7 +85,7 @@ class InstagramService {
     private fun pickImageCandidate(candidates: JsonArray?): String {
         if (candidates.isNullOrEmpty()) return ""
         val index = if (preferHD) 0 else candidates.size - 1
-        return candidates[index].jsonObject["url"]?.jsonPrimitive?.content ?: ""
+        return candidates.getOrNull(index).asObjectOrNull()?.stringAt("url") ?: ""
     }
 
     /**
@@ -75,7 +95,7 @@ class InstagramService {
     private fun pickVideoVersion(versions: JsonArray?): String {
         if (versions.isNullOrEmpty()) return ""
         val index = if (preferHD) 0 else versions.size - 1
-        return versions[index].jsonObject["url"]?.jsonPrimitive?.content ?: ""
+        return versions.getOrNull(index).asObjectOrNull()?.stringAt("url") ?: ""
     }
 
     /**
@@ -83,43 +103,42 @@ class InstagramService {
      * and returns (mediaUrls, thumbnailUrl, isVideo, isCarousel).
      */
     private fun parseV1MediaItem(item: JsonObject): FeedPost {
-        val mediaType = item["media_type"]?.jsonPrimitive?.content?.toIntOrNull() ?: 1
+        val mediaType = item.stringAt("media_type")?.toIntOrNull() ?: 1
         val isVideo = mediaType == 2
         val isCarousel = mediaType == 8
 
         val mediaUrls = mutableListOf<String>()
 
         if (isCarousel) {
-            item["carousel_media"]?.jsonArray?.forEach { carouselItem ->
-                val ci = carouselItem.jsonObject
-                val ciType = ci["media_type"]?.jsonPrimitive?.content?.toIntOrNull() ?: 1
+            item.arrayAt("carousel_media")?.forEach { carouselItem ->
+                val ci = carouselItem.asObjectOrNull() ?: return@forEach
+                val ciType = ci.stringAt("media_type")?.toIntOrNull() ?: 1
                 val ciIsVideo = ciType == 2
                 val url = if (ciIsVideo) {
-                    pickVideoVersion(ci["video_versions"]?.jsonArray)
+                    pickVideoVersion(ci.arrayAt("video_versions"))
                 } else {
-                    pickImageCandidate(ci["image_versions2"]?.jsonObject?.get("candidates")?.jsonArray)
+                    pickImageCandidate(ci.objectAt("image_versions2")?.arrayAt("candidates"))
                 }
                 if (url.isNotEmpty()) mediaUrls.add(url)
             }
         } else {
             val url = if (isVideo) {
-                pickVideoVersion(item["video_versions"]?.jsonArray)
+                pickVideoVersion(item.arrayAt("video_versions"))
             } else {
-                pickImageCandidate(item["image_versions2"]?.jsonObject?.get("candidates")?.jsonArray)
+                pickImageCandidate(item.objectAt("image_versions2")?.arrayAt("candidates"))
             }
             if (url.isNotEmpty()) mediaUrls.add(url)
         }
 
         val thumbnailUrl = pickImageCandidate(
-            item["image_versions2"]?.jsonObject?.get("candidates")?.jsonArray
+            item.objectAt("image_versions2")?.arrayAt("candidates")
         )
 
-        val captionObj = item["caption"]?.jsonObject
-        val caption = captionObj?.get("text")?.jsonPrimitive?.content ?: ""
-        val code = item["code"]?.jsonPrimitive?.content ?: ""
+        val caption = item.objectAt("caption")?.stringAt("text") ?: ""
+        val code = item.stringAt("code") ?: ""
 
         return FeedPost(
-            id = item["id"]?.jsonPrimitive?.content ?: item["pk"]?.jsonPrimitive?.content ?: "",
+            id = item.stringAt("id") ?: item.stringAt("pk") ?: "",
             shortcode = code,
             mediaUrls = mediaUrls,
             thumbnailUrl = thumbnailUrl,
@@ -129,9 +148,9 @@ class InstagramService {
             },
             isCarousel = isCarousel,
             caption = caption,
-            timestamp = item["taken_at"]?.jsonPrimitive?.longOrNull ?: 0,
-            likeCount = item["like_count"]?.jsonPrimitive?.longOrNull ?: 0,
-            commentCount = item["comment_count"]?.jsonPrimitive?.longOrNull ?: 0
+            timestamp = item.longAt("taken_at") ?: 0,
+            likeCount = item.longAt("like_count") ?: 0,
+            commentCount = item.longAt("comment_count") ?: 0
         )
     }
 
@@ -606,20 +625,22 @@ class InstagramService {
             val body = response.bodyAsText()
             val jsonResponse = json.decodeFromString<JsonObject>(body)
 
-            val userData = jsonResponse["data"]?.jsonObject?.get("user")?.jsonObject
+            val userData = jsonResponse.objectAt("data")?.objectAt("user")
                 ?: return@withContext DownloadResult.Error("Benutzer nicht gefunden")
 
             val profile = UserProfile(
-                username = userData["username"]?.jsonPrimitive?.content ?: username,
-                fullName = userData["full_name"]?.jsonPrimitive?.content ?: "",
-                biography = userData["biography"]?.jsonPrimitive?.content ?: "",
-                profilePicUrl = userData["profile_pic_url"]?.jsonPrimitive?.content ?: "",
-                profilePicUrlHD = userData["profile_pic_url_hd"]?.jsonPrimitive?.content ?: "",
-                isPrivate = userData["is_private"]?.jsonPrimitive?.content?.toBooleanStrictOrNull() ?: false,
-                followerCount = userData["edge_followed_by"]?.jsonObject?.get("count")?.jsonPrimitive?.longOrNull ?: 0,
-                followingCount = userData["edge_follow"]?.jsonObject?.get("count")?.jsonPrimitive?.longOrNull ?: 0,
-                postCount = userData["edge_owner_to_timeline_media"]?.jsonObject?.get("count")?.jsonPrimitive?.longOrNull ?: 0,
-                userId = userData["id"]?.jsonPrimitive?.content ?: ""
+                username = userData.stringAt("username") ?: username,
+                fullName = userData.stringAt("full_name") ?: "",
+                biography = userData.stringAt("biography") ?: "",
+                profilePicUrl = userData.stringAt("profile_pic_url") ?: "",
+                profilePicUrlHD = userData.stringAt("profile_pic_url_hd") ?: "",
+                isPrivate = userData.booleanAt("is_private")
+                    ?: userData.stringAt("is_private")?.toBooleanStrictOrNull()
+                    ?: false,
+                followerCount = userData.objectAt("edge_followed_by")?.longAt("count") ?: 0,
+                followingCount = userData.objectAt("edge_follow")?.longAt("count") ?: 0,
+                postCount = userData.objectAt("edge_owner_to_timeline_media")?.longAt("count") ?: 0,
+                userId = userData.stringAt("id") ?: ""
             )
 
             DownloadResult.Success(profile)
@@ -650,34 +671,34 @@ class InstagramService {
             val body = response.bodyAsText()
             val jsonResponse = json.decodeFromString<JsonObject>(body)
 
-            val reels = jsonResponse["reels"]?.jsonObject
-            val reelData = reels?.get(userId)?.jsonObject
-                ?: jsonResponse["reels_media"]?.jsonArray?.firstOrNull()?.jsonObject
+            val reels = jsonResponse.objectAt("reels")
+            val reelData = reels?.get(userId).asObjectOrNull()
+                ?: jsonResponse.arrayAt("reels_media")?.firstOrNull().asObjectOrNull()
 
             if (reelData == null) {
                 return@withContext DownloadResult.Success(emptyList())
             }
 
-            val items = reelData["items"]?.jsonArray?.map { itemJson ->
-                val item = itemJson.jsonObject
-                val mediaType = item["media_type"]?.jsonPrimitive?.content?.toIntOrNull() ?: 1
+            val items = reelData.arrayAt("items")?.mapNotNull { itemJson ->
+                val item = itemJson.asObjectOrNull() ?: return@mapNotNull null
+                val mediaType = item.stringAt("media_type")?.toIntOrNull() ?: 1
                 val isVideo = mediaType == 2
 
                 val imageUrl = pickImageCandidate(
-                    item["image_versions2"]?.jsonObject?.get("candidates")?.jsonArray
+                    item.objectAt("image_versions2")?.arrayAt("candidates")
                 )
 
                 val videoUrl = if (isVideo) {
-                    pickVideoVersion(item["video_versions"]?.jsonArray)
+                    pickVideoVersion(item.arrayAt("video_versions"))
                 } else ""
 
                 StoryItem(
-                    id = item["id"]?.jsonPrimitive?.content ?: item["pk"]?.jsonPrimitive?.content ?: "",
+                    id = item.stringAt("id") ?: item.stringAt("pk") ?: "",
                     mediaUrl = if (isVideo) videoUrl else imageUrl,
                     thumbnailUrl = imageUrl,
                     type = if (isVideo) MediaType.VIDEO else MediaType.IMAGE,
-                    timestamp = item["taken_at"]?.jsonPrimitive?.longOrNull ?: 0,
-                    expiringAt = item["expiring_at"]?.jsonPrimitive?.longOrNull ?: 0
+                    timestamp = item.longAt("taken_at") ?: 0,
+                    expiringAt = item.longAt("expiring_at") ?: 0
                 )
             } ?: emptyList()
 
@@ -708,20 +729,20 @@ class InstagramService {
             val body = response.bodyAsText()
             val jsonResponse = json.decodeFromString<JsonObject>(body)
 
-            val tray = jsonResponse["tray"]?.jsonArray
+            val tray = jsonResponse.arrayAt("tray")
             if (tray.isNullOrEmpty()) {
                 return@withContext DownloadResult.Success(emptyList())
             }
 
-            val highlights = tray.map { highlightJson ->
-                val highlight = highlightJson.jsonObject
-                val coverUrl = highlight["cover_media"]?.jsonObject
-                    ?.get("cropped_image_version")?.jsonObject
-                    ?.get("url")?.jsonPrimitive?.content ?: ""
+            val highlights = tray.mapNotNull { highlightJson ->
+                val highlight = highlightJson.asObjectOrNull() ?: return@mapNotNull null
+                val coverUrl = highlight.objectAt("cover_media")
+                    ?.objectAt("cropped_image_version")
+                    ?.stringAt("url") ?: ""
 
                 HighlightReel(
-                    id = highlight["id"]?.jsonPrimitive?.content ?: "",
-                    title = highlight["title"]?.jsonPrimitive?.content ?: "",
+                    id = highlight.stringAt("id") ?: "",
+                    title = highlight.stringAt("title") ?: "",
                     coverImageUrl = coverUrl
                 )
             }
@@ -756,34 +777,34 @@ class InstagramService {
             val body = response.bodyAsText()
             val jsonResponse = json.decodeFromString<JsonObject>(body)
 
-            val reels = jsonResponse["reels"]?.jsonObject
-            val reelData = reels?.get(reelId)?.jsonObject
-                ?: jsonResponse["reels_media"]?.jsonArray?.firstOrNull()?.jsonObject
+            val reels = jsonResponse.objectAt("reels")
+            val reelData = reels?.get(reelId).asObjectOrNull()
+                ?: jsonResponse.arrayAt("reels_media")?.firstOrNull().asObjectOrNull()
 
             if (reelData == null) {
                 return@withContext DownloadResult.Success(emptyList())
             }
 
-            val items = reelData["items"]?.jsonArray?.map { itemJson ->
-                val item = itemJson.jsonObject
-                val mediaType = item["media_type"]?.jsonPrimitive?.content?.toIntOrNull() ?: 1
+            val items = reelData.arrayAt("items")?.mapNotNull { itemJson ->
+                val item = itemJson.asObjectOrNull() ?: return@mapNotNull null
+                val mediaType = item.stringAt("media_type")?.toIntOrNull() ?: 1
                 val isVideo = mediaType == 2
 
                 val imageUrl = pickImageCandidate(
-                    item["image_versions2"]?.jsonObject?.get("candidates")?.jsonArray
+                    item.objectAt("image_versions2")?.arrayAt("candidates")
                 )
 
                 val videoUrl = if (isVideo) {
-                    pickVideoVersion(item["video_versions"]?.jsonArray)
+                    pickVideoVersion(item.arrayAt("video_versions"))
                 } else ""
 
                 StoryItem(
-                    id = item["id"]?.jsonPrimitive?.content ?: item["pk"]?.jsonPrimitive?.content ?: "",
+                    id = item.stringAt("id") ?: item.stringAt("pk") ?: "",
                     mediaUrl = if (isVideo) videoUrl else imageUrl,
                     thumbnailUrl = imageUrl,
                     type = if (isVideo) MediaType.VIDEO else MediaType.IMAGE,
-                    timestamp = item["taken_at"]?.jsonPrimitive?.longOrNull ?: 0,
-                    expiringAt = item["expiring_at"]?.jsonPrimitive?.longOrNull ?: 0
+                    timestamp = item.longAt("taken_at") ?: 0,
+                    expiringAt = item.longAt("expiring_at") ?: 0
                 )
             } ?: emptyList()
 
@@ -839,18 +860,19 @@ class InstagramService {
                 val body = response.bodyAsText()
                 val jsonResponse = json.decodeFromString<JsonObject>(body)
 
-                val items = jsonResponse["items"]?.jsonArray
+                val items = jsonResponse.arrayAt("items")
                 if (items.isNullOrEmpty()) break
 
                 items.forEach { itemJson ->
-                    val post = parseV1MediaItem(itemJson.jsonObject)
+                    val item = itemJson.asObjectOrNull() ?: return@forEach
+                    val post = parseV1MediaItem(item)
                     if (post.mediaUrls.isNotEmpty()) allPosts.add(post)
                 }
 
-                hasMore = jsonResponse["more_available"]?.jsonPrimitive?.let {
-                    it.booleanOrNull ?: it.content.toBooleanStrictOrNull() ?: (it.content == "1")
-                } ?: false
-                val newMaxId = jsonResponse["next_max_id"]?.jsonPrimitive?.content
+                hasMore = jsonResponse.booleanAt("more_available")
+                    ?: jsonResponse.stringAt("more_available")?.toBooleanStrictOrNull()
+                    ?: (jsonResponse.stringAt("more_available") == "1")
+                val newMaxId = jsonResponse.stringAt("next_max_id")
                 if (newMaxId == maxId) break // Prevent infinite loop with same max_id
                 maxId = newMaxId
 
@@ -886,71 +908,77 @@ class InstagramService {
             val body = response.bodyAsText()
             val jsonResponse = json.decodeFromString<JsonObject>(body)
 
-            val userData = jsonResponse["data"]?.jsonObject?.get("user")?.jsonObject
+            val userData = jsonResponse.objectAt("data")?.objectAt("user")
                 ?: return@withContext DownloadResult.Error("Benutzer nicht gefunden")
 
-            val isPrivate = userData["is_private"]?.jsonPrimitive?.content?.toBooleanStrictOrNull() ?: false
+            val isPrivate = userData.booleanAt("is_private")
+                ?: userData.stringAt("is_private")?.toBooleanStrictOrNull()
+                ?: false
             if (isPrivate && !isLoggedIn) {
                 return@withContext DownloadResult.Error("Privates Profil - Login erforderlich, um Posts zu sehen")
             }
 
-            val edges = userData["edge_owner_to_timeline_media"]?.jsonObject
-                ?.get("edges")?.jsonArray
+            val edges = userData.objectAt("edge_owner_to_timeline_media")
+                ?.arrayAt("edges")
 
             if (edges.isNullOrEmpty()) {
                 return@withContext DownloadResult.Success(emptyList())
             }
 
             val posts = edges.mapNotNull { edgeJson ->
-                val node = edgeJson.jsonObject["node"]?.jsonObject ?: return@mapNotNull null
-                val typename = node["__typename"]?.jsonPrimitive?.content ?: ""
-                val isVideo = node["is_video"]?.jsonPrimitive?.content?.toBooleanStrictOrNull() ?: false
+                val node = edgeJson.asObjectOrNull()?.objectAt("node") ?: return@mapNotNull null
+                val typename = node.stringAt("__typename") ?: ""
+                val isVideo = node.booleanAt("is_video")
+                    ?: node.stringAt("is_video")?.toBooleanStrictOrNull()
+                    ?: false
                 val isCarousel = typename == "GraphSidecar"
 
                 val mediaUrls = mutableListOf<String>()
 
                 if (isCarousel) {
-                    val sidecarEdges = node["edge_sidecar_to_children"]?.jsonObject
-                        ?.get("edges")?.jsonArray
+                    val sidecarEdges = node.objectAt("edge_sidecar_to_children")
+                        ?.arrayAt("edges")
                     sidecarEdges?.forEach { sidecarEdge ->
-                        val childNode = sidecarEdge.jsonObject["node"]?.jsonObject
-                        val childIsVideo = childNode?.get("is_video")?.jsonPrimitive?.content?.toBooleanStrictOrNull() ?: false
+                        val childNode = sidecarEdge.asObjectOrNull()?.objectAt("node")
+                        val childIsVideo = childNode?.booleanAt("is_video")
+                            ?: childNode?.stringAt("is_video")?.toBooleanStrictOrNull()
+                            ?: false
                         val url = if (childIsVideo) {
-                            childNode?.get("video_url")?.jsonPrimitive?.content ?: ""
+                            childNode?.stringAt("video_url") ?: ""
                         } else {
-                            childNode?.get("display_url")?.jsonPrimitive?.content ?: ""
+                            childNode?.stringAt("display_url") ?: ""
                         }
                         if (url.isNotEmpty()) mediaUrls.add(url)
                     }
                 } else {
                     val url = if (isVideo) {
-                        node["video_url"]?.jsonPrimitive?.content ?: ""
+                        node.stringAt("video_url") ?: ""
                     } else {
-                        node["display_url"]?.jsonPrimitive?.content ?: ""
+                        node.stringAt("display_url") ?: ""
                     }
                     if (url.isNotEmpty()) mediaUrls.add(url)
                 }
 
-                val caption = node["edge_media_to_caption"]?.jsonObject
-                    ?.get("edges")?.jsonArray
-                    ?.firstOrNull()?.jsonObject
-                    ?.get("node")?.jsonObject
-                    ?.get("text")?.jsonPrimitive?.content ?: ""
+                val caption = node.objectAt("edge_media_to_caption")
+                    ?.arrayAt("edges")
+                    ?.firstOrNull().asObjectOrNull()
+                    ?.objectAt("node")
+                    ?.stringAt("text") ?: ""
 
                 FeedPost(
-                    id = node["id"]?.jsonPrimitive?.content ?: "",
-                    shortcode = node["shortcode"]?.jsonPrimitive?.content ?: "",
+                    id = node.stringAt("id") ?: "",
+                    shortcode = node.stringAt("shortcode") ?: "",
                     mediaUrls = mediaUrls,
-                    thumbnailUrl = node["thumbnail_src"]?.jsonPrimitive?.content
-                        ?: node["display_url"]?.jsonPrimitive?.content ?: "",
+                    thumbnailUrl = node.stringAt("thumbnail_src")
+                        ?: node.stringAt("display_url") ?: "",
                     type = if (isVideo) MediaType.VIDEO else MediaType.IMAGE,
                     isCarousel = isCarousel,
                     caption = caption,
-                    timestamp = node["taken_at_timestamp"]?.jsonPrimitive?.longOrNull ?: 0,
-                    likeCount = node["edge_liked_by"]?.jsonObject?.get("count")?.jsonPrimitive?.longOrNull
-                        ?: node["edge_media_preview_like"]?.jsonObject?.get("count")?.jsonPrimitive?.longOrNull ?: 0,
-                    commentCount = node["edge_media_to_comment"]?.jsonObject?.get("count")?.jsonPrimitive?.longOrNull
-                        ?: node["edge_media_preview_comment"]?.jsonObject?.get("count")?.jsonPrimitive?.longOrNull ?: 0
+                    timestamp = node.longAt("taken_at_timestamp") ?: 0,
+                    likeCount = node.objectAt("edge_liked_by")?.longAt("count")
+                        ?: node.objectAt("edge_media_preview_like")?.longAt("count") ?: 0,
+                    commentCount = node.objectAt("edge_media_to_comment")?.longAt("count")
+                        ?: node.objectAt("edge_media_preview_comment")?.longAt("count") ?: 0
                 )
             }
 
@@ -998,16 +1026,19 @@ class InstagramService {
                 val body = response.bodyAsText()
                 val jsonResponse = json.decodeFromString<JsonObject>(body)
 
-                val items = jsonResponse["items"]?.jsonArray
+                val items = jsonResponse.arrayAt("items")
                 if (items.isNullOrEmpty()) break
 
                 items.forEach { itemJson ->
-                    allPosts.add(parseV1MediaItem(itemJson.jsonObject))
+                    val item = itemJson.asObjectOrNull() ?: return@forEach
+                    allPosts.add(parseV1MediaItem(item))
                 }
 
                 // Check for more pages
-                hasMore = jsonResponse["more_available"]?.jsonPrimitive?.content?.toBooleanStrictOrNull() ?: false
-                maxId = jsonResponse["next_max_id"]?.jsonPrimitive?.content
+                hasMore = jsonResponse.booleanAt("more_available")
+                    ?: jsonResponse.stringAt("more_available")?.toBooleanStrictOrNull()
+                    ?: false
+                maxId = jsonResponse.stringAt("next_max_id")
 
                 // Safety limit to avoid infinite loop
                 if (allPosts.size >= 500) break
@@ -1061,21 +1092,22 @@ class InstagramService {
                 val body = response.bodyAsText()
                 val jsonResponse = json.decodeFromString<JsonObject>(body)
 
-                val items = jsonResponse["items"]?.jsonArray
+                val items = jsonResponse.arrayAt("items")
                 if (items.isNullOrEmpty()) break
 
                 items.forEach { itemJson ->
-                    val media = itemJson.jsonObject["media"]?.jsonObject ?: itemJson.jsonObject
+                    val item = itemJson.asObjectOrNull() ?: return@forEach
+                    val media = item.objectAt("media") ?: item
                     val post = parseV1MediaItem(media)
                     if (post.mediaUrls.isNotEmpty()) {
                         allPosts.add(post)
                     }
                 }
 
-                hasMore = jsonResponse["paging_info"]?.jsonObject
-                    ?.get("more_available")?.jsonPrimitive?.content?.toBooleanStrictOrNull() ?: false
-                maxId = jsonResponse["paging_info"]?.jsonObject
-                    ?.get("max_id")?.jsonPrimitive?.content
+                hasMore = jsonResponse.objectAt("paging_info")?.booleanAt("more_available")
+                    ?: jsonResponse.objectAt("paging_info")?.stringAt("more_available")?.toBooleanStrictOrNull()
+                    ?: false
+                maxId = jsonResponse.objectAt("paging_info")?.stringAt("max_id")
 
                 if (allPosts.size >= 200) break
             }
@@ -1120,16 +1152,19 @@ class InstagramService {
                 val body = response.bodyAsText()
                 val jsonResponse = json.decodeFromString<JsonObject>(body)
 
-                val items = jsonResponse["items"]?.jsonArray
+                val items = jsonResponse.arrayAt("items")
                 if (items.isNullOrEmpty()) break
 
                 items.forEach { itemJson ->
-                    val media = itemJson.jsonObject["media"]?.jsonObject ?: itemJson.jsonObject
+                    val item = itemJson.asObjectOrNull() ?: return@forEach
+                    val media = item.objectAt("media") ?: item
                     allPosts.add(parseV1MediaItem(media))
                 }
 
-                hasMore = jsonResponse["more_available"]?.jsonPrimitive?.content?.toBooleanStrictOrNull() ?: false
-                maxId = jsonResponse["next_max_id"]?.jsonPrimitive?.content
+                hasMore = jsonResponse.booleanAt("more_available")
+                    ?: jsonResponse.stringAt("more_available")?.toBooleanStrictOrNull()
+                    ?: false
+                maxId = jsonResponse.stringAt("next_max_id")
 
                 if (allPosts.size >= 500) break
             }
@@ -1174,15 +1209,18 @@ class InstagramService {
                 val body = response.bodyAsText()
                 val jsonResponse = json.decodeFromString<JsonObject>(body)
 
-                val items = jsonResponse["items"]?.jsonArray
+                val items = jsonResponse.arrayAt("items")
                 if (items.isNullOrEmpty()) break
 
                 items.forEach { itemJson ->
-                    allPosts.add(parseV1MediaItem(itemJson.jsonObject))
+                    val item = itemJson.asObjectOrNull() ?: return@forEach
+                    allPosts.add(parseV1MediaItem(item))
                 }
 
-                hasMore = jsonResponse["more_available"]?.jsonPrimitive?.content?.toBooleanStrictOrNull() ?: false
-                maxId = jsonResponse["next_max_id"]?.jsonPrimitive?.content
+                hasMore = jsonResponse.booleanAt("more_available")
+                    ?: jsonResponse.stringAt("more_available")?.toBooleanStrictOrNull()
+                    ?: false
+                maxId = jsonResponse.stringAt("next_max_id")
 
                 if (allPosts.size >= 500) break
             }
@@ -1233,8 +1271,8 @@ class InstagramService {
             val body = response.bodyAsText()
             val jsonResponse = json.decodeFromString<JsonObject>(body)
 
-            val items = jsonResponse["items"]?.jsonArray
-            val item = items?.firstOrNull()?.jsonObject
+            val items = jsonResponse.arrayAt("items")
+            val item = items?.firstOrNull().asObjectOrNull()
                 ?: return@withContext DownloadResult.Error("Post nicht gefunden")
 
             val post = parseV1MediaItem(item).copy(shortcode = shortcode)
@@ -1260,54 +1298,58 @@ class InstagramService {
             val body = response.bodyAsText()
             val jsonResponse = json.decodeFromString<JsonObject>(body)
 
-            val node = jsonResponse["graphql"]?.jsonObject?.get("shortcode_media")?.jsonObject
-                ?: jsonResponse["data"]?.jsonObject?.get("shortcode_media")?.jsonObject
+            val node = jsonResponse.objectAt("graphql")?.objectAt("shortcode_media")
+                ?: jsonResponse.objectAt("data")?.objectAt("shortcode_media")
                 ?: return@withContext DownloadResult.Error("Post-Daten nicht gefunden")
 
-            val isVideo = node["is_video"]?.jsonPrimitive?.content?.toBooleanStrictOrNull() ?: false
-            val isCarousel = node["__typename"]?.jsonPrimitive?.content == "GraphSidecar"
+            val isVideo = node.booleanAt("is_video")
+                ?: node.stringAt("is_video")?.toBooleanStrictOrNull()
+                ?: false
+            val isCarousel = node.stringAt("__typename") == "GraphSidecar"
 
             val mediaUrls = mutableListOf<String>()
 
             if (isCarousel) {
-                val edges = node["edge_sidecar_to_children"]?.jsonObject?.get("edges")?.jsonArray
+                val edges = node.objectAt("edge_sidecar_to_children")?.arrayAt("edges")
                 edges?.forEach { edge ->
-                    val childNode = edge.jsonObject["node"]?.jsonObject
-                    val childIsVideo = childNode?.get("is_video")?.jsonPrimitive?.content?.toBooleanStrictOrNull() ?: false
+                    val childNode = edge.asObjectOrNull()?.objectAt("node")
+                    val childIsVideo = childNode?.booleanAt("is_video")
+                        ?: childNode?.stringAt("is_video")?.toBooleanStrictOrNull()
+                        ?: false
                     val url = if (childIsVideo) {
-                        childNode?.get("video_url")?.jsonPrimitive?.content ?: ""
+                        childNode?.stringAt("video_url") ?: ""
                     } else {
-                        childNode?.get("display_url")?.jsonPrimitive?.content ?: ""
+                        childNode?.stringAt("display_url") ?: ""
                     }
                     if (url.isNotEmpty()) mediaUrls.add(url)
                 }
             } else {
                 val url = if (isVideo) {
-                    node["video_url"]?.jsonPrimitive?.content ?: ""
+                    node.stringAt("video_url") ?: ""
                 } else {
-                    node["display_url"]?.jsonPrimitive?.content ?: ""
+                    node.stringAt("display_url") ?: ""
                 }
                 if (url.isNotEmpty()) mediaUrls.add(url)
             }
 
-            val caption = node["edge_media_to_caption"]?.jsonObject
-                ?.get("edges")?.jsonArray
-                ?.firstOrNull()?.jsonObject
-                ?.get("node")?.jsonObject
-                ?.get("text")?.jsonPrimitive?.content ?: ""
+            val caption = node.objectAt("edge_media_to_caption")
+                ?.arrayAt("edges")
+                ?.firstOrNull().asObjectOrNull()
+                ?.objectAt("node")
+                ?.stringAt("text") ?: ""
 
             DownloadResult.Success(
                 FeedPost(
-                    id = node["id"]?.jsonPrimitive?.content ?: "",
+                    id = node.stringAt("id") ?: "",
                     shortcode = shortcode,
                     mediaUrls = mediaUrls,
-                    thumbnailUrl = node["display_url"]?.jsonPrimitive?.content ?: "",
+                    thumbnailUrl = node.stringAt("display_url") ?: "",
                     type = if (isVideo) MediaType.VIDEO else MediaType.IMAGE,
                     isCarousel = isCarousel,
                     caption = caption,
-                    timestamp = node["taken_at_timestamp"]?.jsonPrimitive?.longOrNull ?: 0,
-                    likeCount = node["edge_media_preview_like"]?.jsonObject?.get("count")?.jsonPrimitive?.longOrNull ?: 0,
-                    commentCount = node["edge_media_preview_comment"]?.jsonObject?.get("count")?.jsonPrimitive?.longOrNull ?: 0
+                    timestamp = node.longAt("taken_at_timestamp") ?: 0,
+                    likeCount = node.objectAt("edge_media_preview_like")?.longAt("count") ?: 0,
+                    commentCount = node.objectAt("edge_media_preview_comment")?.longAt("count") ?: 0
                 )
             )
         } catch (e: Exception) {

@@ -15,6 +15,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import java.io.File
@@ -45,6 +46,7 @@ class DownloadManager(
 
     private val dateFormat = SimpleDateFormat("yyyy-MM-dd_HH-mm-ss", Locale.getDefault())
     private val metadataJson = Json { ignoreUnknownKeys = true }
+    var onlyNewDownloads: Boolean = true
 
     /**
      * Gets the download directory using app-specific external storage.
@@ -111,6 +113,10 @@ class DownloadManager(
         val extension = DownloadFilePlanner.mediaExtension(url, treatAsVideo = false)
         val filename = DownloadFilePlanner.buildProfilePictureFileName(profile.username, extension)
         val outputPath = File(downloadDir, "${profile.username}/$filename").absolutePath
+        if (onlyNewDownloads && File(outputPath).exists()) {
+            _downloadProgress.value = DownloadProgress.Complete(0, "Profilbild bereits vorhanden")
+            return DownloadResult.Success(outputPath)
+        }
 
         var result = instagramService.downloadFile(url, outputPath)
 
@@ -152,7 +158,9 @@ class DownloadManager(
         }
 
         val downloadedFiles = mutableListOf<String>()
+        val existingIndex = buildExistingIndex(downloadDir)
         val total = storyItems.size
+        var skippedCount = 0
 
         storyItems.forEachIndexed { index, story ->
             _downloadProgress.value = DownloadProgress.Downloading(index, total, "Story ${index + 1}/$total")
@@ -164,19 +172,27 @@ class DownloadManager(
             val timestamp = dateFormat.format(Date(story.timestamp * 1000))
             val filename = "${profile.username}_story_${timestamp}_${story.id}.$extension"
             val outputPath = File(downloadDir, "${profile.username}/stories/$filename").absolutePath
+            val metadata = DownloadedMediaMetadata(
+                username = profile.username,
+                category = "stories",
+                sourceTimestamp = story.timestamp * 1000L,
+                sourceId = story.id,
+                mediaIndex = 0,
+                isVideo = story.type == MediaType.VIDEO,
+            )
+
+            if (onlyNewDownloads && existingContains(existingIndex, outputPath, metadata)) {
+                skippedCount++
+                return@forEachIndexed
+            }
 
             when (val result = instagramService.downloadFile(story.mediaUrl, outputPath)) {
                 is DownloadResult.Success -> {
                     downloadedFiles.add(result.data)
+                    existingAdd(existingIndex, result.data, metadata)
                     writeMetadata(
                         filePath = result.data,
-                        metadata = DownloadedMediaMetadata(
-                            username = profile.username,
-                            category = "stories",
-                            sourceTimestamp = story.timestamp * 1000L,
-                            sourceId = story.id,
-                            isVideo = story.type == MediaType.VIDEO,
-                        ),
+                        metadata = metadata,
                     )
                 }
                 is DownloadResult.Error -> {}
@@ -184,7 +200,8 @@ class DownloadManager(
             }
         }
 
-        _downloadProgress.value = DownloadProgress.Complete(downloadedFiles.size, "Stories")
+        val completeLabel = if (skippedCount > 0) "Stories, $skippedCount bereits vorhanden" else "Stories"
+        _downloadProgress.value = DownloadProgress.Complete(downloadedFiles.size, completeLabel)
         return DownloadResult.Success(downloadedFiles)
     }
 
@@ -211,8 +228,10 @@ class DownloadManager(
         }
 
         val downloadedFiles = mutableListOf<String>()
+        val existingIndex = buildExistingIndex(downloadDir)
         val total = items.size
         val safeTitle = DownloadFilePlanner.sanitizePathSegment(highlight.title)
+        var skippedCount = 0
 
         items.forEachIndexed { index, item ->
             _downloadProgress.value = DownloadProgress.Downloading(
@@ -227,20 +246,28 @@ class DownloadManager(
             )
             val filename = "${profile.username}_highlight_${safeTitle}_${item.id}.$extension"
             val outputPath = File(downloadDir, "${profile.username}/highlights/$safeTitle/$filename").absolutePath
+            val metadata = DownloadedMediaMetadata(
+                username = profile.username,
+                category = "highlights",
+                sourceTimestamp = item.timestamp * 1000L,
+                sourceId = item.id,
+                highlightTitle = highlight.title,
+                mediaIndex = 0,
+                isVideo = item.type == MediaType.VIDEO,
+            )
+
+            if (onlyNewDownloads && existingContains(existingIndex, outputPath, metadata)) {
+                skippedCount++
+                return@forEachIndexed
+            }
 
             when (val result = instagramService.downloadFile(item.mediaUrl, outputPath)) {
                 is DownloadResult.Success -> {
                     downloadedFiles.add(result.data)
+                    existingAdd(existingIndex, result.data, metadata)
                     writeMetadata(
                         filePath = result.data,
-                        metadata = DownloadedMediaMetadata(
-                            username = profile.username,
-                            category = "highlights",
-                            sourceTimestamp = item.timestamp * 1000L,
-                            sourceId = item.id,
-                            highlightTitle = highlight.title,
-                            isVideo = item.type == MediaType.VIDEO,
-                        ),
+                        metadata = metadata,
                     )
                 }
                 is DownloadResult.Error -> {}
@@ -248,7 +275,12 @@ class DownloadManager(
             }
         }
 
-        _downloadProgress.value = DownloadProgress.Complete(downloadedFiles.size, "Highlight '${highlight.title}'")
+        val completeLabel = if (skippedCount > 0) {
+            "Highlight '${highlight.title}', $skippedCount bereits vorhanden"
+        } else {
+            "Highlight '${highlight.title}'"
+        }
+        _downloadProgress.value = DownloadProgress.Complete(downloadedFiles.size, completeLabel)
         return DownloadResult.Success(downloadedFiles)
     }
 
@@ -281,6 +313,7 @@ class DownloadManager(
     ): DownloadResult<List<String>> {
         return downloadPostCollection(
             posts = posts,
+            downloadDir = downloadDir,
             emptyProgressMessage = "Keine Posts zum Download verfugbar",
             emptyResultMessage = "Keine Posts verfugbar",
             progressLabel = { current, total -> "Post $current/$total" },
@@ -296,7 +329,7 @@ class DownloadManager(
                 )
                 File(downloadDir, "${profile.username}/posts/$filename").absolutePath
             },
-            metadataBuilder = { post, _, url ->
+            metadataBuilder = { post, mediaIndex, url ->
                 DownloadedMediaMetadata(
                     username = profile.username,
                     category = "posts",
@@ -304,6 +337,7 @@ class DownloadManager(
                     caption = post.caption,
                     shortcode = post.shortcode,
                     sourceId = post.id,
+                    mediaIndex = mediaIndex,
                     isVideo = post.type == MediaType.VIDEO || url.contains(".mp4", ignoreCase = true),
                 )
             },
@@ -320,6 +354,7 @@ class DownloadManager(
     ): DownloadResult<List<String>> {
         return downloadPostCollection(
             posts = posts,
+            downloadDir = downloadDir,
             emptyProgressMessage = "Keine archivierten Posts zum Download verfugbar",
             emptyResultMessage = "Keine archivierten Posts verfugbar",
             progressLabel = { current, total -> "Archiv-Post $current/$total" },
@@ -335,7 +370,7 @@ class DownloadManager(
                 )
                 File(downloadDir, "$username/archive/$filename").absolutePath
             },
-            metadataBuilder = { post, _, url ->
+            metadataBuilder = { post, mediaIndex, url ->
                 DownloadedMediaMetadata(
                     username = username,
                     category = "archive",
@@ -343,6 +378,7 @@ class DownloadManager(
                     caption = post.caption,
                     shortcode = post.shortcode,
                     sourceId = post.id,
+                    mediaIndex = mediaIndex,
                     isVideo = post.type == MediaType.VIDEO || url.contains(".mp4", ignoreCase = true),
                 )
             },
@@ -359,6 +395,7 @@ class DownloadManager(
     ): DownloadResult<List<String>> {
         return downloadPostCollection(
             posts = reels,
+            downloadDir = downloadDir,
             emptyProgressMessage = "Keine Reels zum Download verfugbar",
             emptyResultMessage = "Keine Reels verfugbar",
             progressLabel = { current, total -> "Reel $current/$total" },
@@ -374,7 +411,7 @@ class DownloadManager(
                 )
                 File(downloadDir, "${profile.username}/reels/$filename").absolutePath
             },
-            metadataBuilder = { post, _, _ ->
+            metadataBuilder = { post, mediaIndex, _ ->
                 DownloadedMediaMetadata(
                     username = profile.username,
                     category = "reels",
@@ -382,6 +419,7 @@ class DownloadManager(
                     caption = post.caption,
                     shortcode = post.shortcode,
                     sourceId = post.id,
+                    mediaIndex = mediaIndex,
                     isVideo = true,
                 )
             },
@@ -397,6 +435,7 @@ class DownloadManager(
     ): DownloadResult<List<String>> {
         return downloadPostCollection(
             posts = posts,
+            downloadDir = downloadDir,
             emptyProgressMessage = "Keine gespeicherten Posts zum Download verfugbar",
             emptyResultMessage = "Keine gespeicherten Posts verfugbar",
             progressLabel = { current, total -> "Gespeicherter Post $current/$total" },
@@ -412,13 +451,14 @@ class DownloadManager(
                 )
                 File(downloadDir, "saved/$filename").absolutePath
             },
-            metadataBuilder = { post, _, url ->
+            metadataBuilder = { post, mediaIndex, url ->
                 DownloadedMediaMetadata(
                     category = "saved",
                     sourceTimestamp = post.timestamp * 1000L,
                     caption = post.caption,
                     shortcode = post.shortcode,
                     sourceId = post.id,
+                    mediaIndex = mediaIndex,
                     isVideo = post.type == MediaType.VIDEO || url.contains(".mp4", ignoreCase = true),
                 )
             },
@@ -435,6 +475,7 @@ class DownloadManager(
     ): DownloadResult<List<String>> {
         return downloadPostCollection(
             posts = posts,
+            downloadDir = downloadDir,
             emptyProgressMessage = "Keine markierten Posts zum Download verfugbar",
             emptyResultMessage = "Keine markierten Posts verfugbar",
             progressLabel = { current, total -> "Markierter Post $current/$total" },
@@ -450,7 +491,7 @@ class DownloadManager(
                 )
                 File(downloadDir, "${profile.username}/tagged/$filename").absolutePath
             },
-            metadataBuilder = { post, _, url ->
+            metadataBuilder = { post, mediaIndex, url ->
                 DownloadedMediaMetadata(
                     username = profile.username,
                     category = "tagged",
@@ -458,6 +499,7 @@ class DownloadManager(
                     caption = post.caption,
                     shortcode = post.shortcode,
                     sourceId = post.id,
+                    mediaIndex = mediaIndex,
                     isVideo = post.type == MediaType.VIDEO || url.contains(".mp4", ignoreCase = true),
                 )
             },
@@ -473,6 +515,7 @@ class DownloadManager(
     ): DownloadResult<List<String>> {
         return downloadPostCollection(
             posts = listOf(post),
+            downloadDir = downloadDir,
             emptyProgressMessage = "Kein geteilter Post zum Download verfugbar",
             emptyResultMessage = "Kein geteilter Post verfugbar",
             progressLabel = { current, total -> "Geteilter Post $current/$total" },
@@ -488,13 +531,14 @@ class DownloadManager(
                 )
                 File(downloadDir, "shared/$filename").absolutePath
             },
-            metadataBuilder = { currentPost, _, url ->
+            metadataBuilder = { currentPost, mediaIndex, url ->
                 DownloadedMediaMetadata(
                     category = "shared",
                     sourceTimestamp = currentPost.timestamp * 1000L,
                     caption = currentPost.caption,
                     shortcode = currentPost.shortcode,
                     sourceId = currentPost.id,
+                    mediaIndex = mediaIndex,
                     isVideo = currentPost.type == MediaType.VIDEO || url.contains(".mp4", ignoreCase = true),
                 )
             },
@@ -512,6 +556,7 @@ class DownloadManager(
 
     private suspend fun downloadPostCollection(
         posts: List<FeedPost>,
+        downloadDir: String,
         emptyProgressMessage: String,
         emptyResultMessage: String,
         progressLabel: (current: Int, total: Int) -> String,
@@ -525,8 +570,10 @@ class DownloadManager(
         }
 
         val downloadedFiles = mutableListOf<String>()
+        val existingIndex = buildExistingIndex(downloadDir)
         val totalMedia = posts.sumOf { it.mediaUrls.size }
         var currentItem = 0
+        var skippedCount = 0
 
         posts.forEach { post ->
             val timestamp = dateFormat.format(Date(post.timestamp * 1000))
@@ -542,13 +589,20 @@ class DownloadManager(
                 val treatAsVideo = post.type == MediaType.VIDEO && post.mediaUrls.size == 1
                 val extension = DownloadFilePlanner.mediaExtension(url, treatAsVideo)
                 val plannedPath = outputPath(post, mediaIndex, extension, timestamp)
+                val metadata = metadataBuilder(post, mediaIndex, url)
+
+                if (onlyNewDownloads && existingContains(existingIndex, plannedPath, metadata)) {
+                    skippedCount++
+                    return@forEachIndexed
+                }
 
                 when (val result = instagramService.downloadFile(url, plannedPath)) {
                     is DownloadResult.Success -> {
                         downloadedFiles.add(result.data)
+                        existingAdd(existingIndex, result.data, metadata)
                         writeMetadata(
                             filePath = result.data,
-                            metadata = metadataBuilder(post, mediaIndex, url),
+                            metadata = metadata,
                         )
                     }
                     is DownloadResult.Error -> {}
@@ -557,7 +611,12 @@ class DownloadManager(
             }
         }
 
-        _downloadProgress.value = DownloadProgress.Complete(downloadedFiles.size, completeLabel)
+        val completionLabel = if (skippedCount > 0) {
+            "$completeLabel, $skippedCount bereits vorhanden"
+        } else {
+            completeLabel
+        }
+        _downloadProgress.value = DownloadProgress.Complete(downloadedFiles.size, completionLabel)
         return DownloadResult.Success(downloadedFiles)
     }
 
@@ -567,6 +626,67 @@ class DownloadManager(
             metadataFile.parentFile?.mkdirs()
             metadataFile.writeText(metadataJson.encodeToString(metadata))
         }
+    }
+
+    private fun buildExistingIndex(downloadDir: String): ExistingDownloadIndex {
+        val root = File(downloadDir)
+        if (!root.exists()) {
+            return ExistingDownloadIndex()
+        }
+
+        val existingPaths = mutableSetOf<String>()
+        val existingKeys = mutableSetOf<String>()
+
+        root.walkTopDown()
+            .filter { it.isFile }
+            .forEach { file ->
+                if (!file.name.endsWith(".meta.json")) {
+                    existingPaths.add(file.absolutePath)
+                    return@forEach
+                }
+
+                runCatching {
+                    val metadata = metadataJson.decodeFromString<DownloadedMediaMetadata>(file.readText())
+                    existingKeys.add(metadataKey(metadata))
+                }
+            }
+
+        return ExistingDownloadIndex(existingPaths, existingKeys)
+    }
+
+    private data class ExistingDownloadIndex(
+        val paths: MutableSet<String> = mutableSetOf(),
+        val metadataKeys: MutableSet<String> = mutableSetOf(),
+    )
+
+    private fun existingContains(
+        index: ExistingDownloadIndex,
+        path: String,
+        metadata: DownloadedMediaMetadata,
+    ): Boolean {
+        return path in index.paths || metadataKey(metadata) in index.metadataKeys
+    }
+
+    private fun existingAdd(
+        index: ExistingDownloadIndex,
+        path: String,
+        metadata: DownloadedMediaMetadata,
+    ) {
+        index.paths.add(path)
+        index.metadataKeys.add(metadataKey(metadata))
+    }
+
+    private fun metadataKey(metadata: DownloadedMediaMetadata): String {
+        return listOf(
+            metadata.username,
+            metadata.category,
+            metadata.sourceId,
+            metadata.shortcode,
+            metadata.highlightTitle,
+            metadata.sourceTimestamp.toString(),
+            metadata.mediaIndex.toString(),
+            metadata.isVideo.toString(),
+        ).joinToString("|")
     }
 }
 

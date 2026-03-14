@@ -62,6 +62,7 @@ class MainActivity : ComponentActivity() {
                 val galleryItems by viewModel.galleryItems.collectAsState()
                 val searchHistory by viewModel.searchHistory.collectAsState()
                 val downloadQuality by viewModel.downloadQuality.collectAsState()
+                val downloadOnlyNew by viewModel.downloadOnlyNew.collectAsState()
                 val clipboardUrl by viewModel.clipboardUrl.collectAsState()
                 val requestHealth by viewModel.requestHealth.collectAsState()
 
@@ -101,6 +102,7 @@ class MainActivity : ComponentActivity() {
                             isOwnProfile = isOwnProfile,
                             searchHistory = searchHistory,
                             downloadQuality = downloadQuality,
+                            downloadOnlyNew = downloadOnlyNew,
                             clipboardUrl = clipboardUrl,
                             requestHealth = requestHealth,
                             isSearchLoading = isSearchLoading,
@@ -120,6 +122,10 @@ class MainActivity : ComponentActivity() {
                             onToggleFavorite = { viewModel.toggleFavorite(it) },
                             onRemoveFromHistory = { viewModel.removeFromHistory(it) },
                             onToggleQuality = { viewModel.toggleQuality() },
+                            onToggleDownloadOnlyNew = { viewModel.toggleDownloadOnlyNew() },
+                            onDownloadPreviewItem = { category, sourceId ->
+                                viewModel.downloadPreviewItem(category, sourceId)
+                            },
                             onHandleClipboardUrl = { viewModel.handleClipboardUrl() },
                             onDismissClipboardUrl = { viewModel.dismissClipboardUrl() },
                             onLogout = { viewModel.logout() },

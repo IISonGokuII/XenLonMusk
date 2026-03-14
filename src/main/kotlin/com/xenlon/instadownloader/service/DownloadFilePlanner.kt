@@ -1,6 +1,6 @@
 package com.xenlon.instadownloader.service
 
-internal object DownloadFilePlanner {
+object DownloadFilePlanner {
     fun mediaExtension(url: String, treatAsVideo: Boolean): String {
         return when {
             treatAsVideo || url.contains(".mp4", ignoreCase = true) -> "mp4"

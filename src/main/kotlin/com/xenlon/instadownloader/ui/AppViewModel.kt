@@ -117,6 +117,9 @@ class AppViewModel(private val appContext: Context) {
     private val _downloadQuality = MutableStateFlow(DownloadQuality.HD)
     val downloadQuality: StateFlow<DownloadQuality> = _downloadQuality.asStateFlow()
 
+    private val _downloadOnlyNew = MutableStateFlow(true)
+    val downloadOnlyNew: StateFlow<Boolean> = _downloadOnlyNew.asStateFlow()
+
     // Search loading state
     private val _isSearchLoading = MutableStateFlow(false)
     val isSearchLoading: StateFlow<Boolean> = _isSearchLoading.asStateFlow()
@@ -132,6 +135,7 @@ class AppViewModel(private val appContext: Context) {
     init {
         loadSearchHistory()
         loadQualityPreference()
+        loadDownloadPreferences()
         startClipboardMonitoring()
     }
 
@@ -367,6 +371,56 @@ class AppViewModel(private val appContext: Context) {
         scope.launch { downloadManager.downloadSharedPost(postResult.data) }
     }
 
+    fun downloadPreviewItem(category: String, sourceId: String) {
+        val profile = _currentProfile.value ?: return
+        scope.launch {
+            when (category.lowercase()) {
+                "stories" -> {
+                    val story = (_stories.value as? DownloadResult.Success)?.data
+                        ?.firstOrNull { it.id == sourceId }
+                        ?: return@launch
+                    downloadManager.downloadStories(profile, listOf(story))
+                }
+                "highlights" -> {
+                    val highlight = (_highlights.value as? DownloadResult.Success)?.data
+                        ?.firstOrNull { it.id == sourceId }
+                        ?: return@launch
+                    downloadManager.downloadHighlight(profile, highlight)
+                }
+                "reels" -> {
+                    val post = (_reels.value as? DownloadResult.Success)?.data
+                        ?.firstOrNull { it.id == sourceId }
+                        ?: return@launch
+                    downloadManager.downloadReels(profile, listOf(post))
+                }
+                "markiert" -> {
+                    val post = (_taggedPosts.value as? DownloadResult.Success)?.data
+                        ?.firstOrNull { it.id == sourceId }
+                        ?: return@launch
+                    downloadManager.downloadTaggedPosts(profile, listOf(post))
+                }
+                "archiv" -> {
+                    val post = (_archivedPosts.value as? DownloadResult.Success)?.data
+                        ?.firstOrNull { it.id == sourceId }
+                        ?: return@launch
+                    downloadManager.downloadArchivedPosts(profile.username, listOf(post))
+                }
+                "gespeichert" -> {
+                    val post = (_savedPosts.value as? DownloadResult.Success)?.data
+                        ?.firstOrNull { it.id == sourceId }
+                        ?: return@launch
+                    downloadManager.downloadSavedPosts(listOf(post))
+                }
+                else -> {
+                    val post = (_feedPosts.value as? DownloadResult.Success)?.data
+                        ?.firstOrNull { it.id == sourceId }
+                        ?: return@launch
+                    downloadManager.downloadFeedPosts(profile, listOf(post))
+                }
+            }
+        }
+    }
+
     fun dismissSharedPost() {
         _sharedPost.value = null
     }
@@ -408,11 +462,24 @@ class AppViewModel(private val appContext: Context) {
         prefs.edit().putString("download_quality", newQuality.name).apply()
     }
 
+    fun toggleDownloadOnlyNew() {
+        val newValue = !_downloadOnlyNew.value
+        _downloadOnlyNew.value = newValue
+        downloadManager.onlyNewDownloads = newValue
+        prefs.edit().putBoolean("download_only_new", newValue).apply()
+    }
+
     private fun loadQualityPreference() {
         val saved = prefs.getString("download_quality", "HD") ?: "HD"
         val quality = try { DownloadQuality.valueOf(saved) } catch (_: Exception) { DownloadQuality.HD }
         _downloadQuality.value = quality
         instagramService.preferHD = quality == DownloadQuality.HD
+    }
+
+    private fun loadDownloadPreferences() {
+        val onlyNew = prefs.getBoolean("download_only_new", true)
+        _downloadOnlyNew.value = onlyNew
+        downloadManager.onlyNewDownloads = onlyNew
     }
 
     // --- Clipboard Monitoring ---

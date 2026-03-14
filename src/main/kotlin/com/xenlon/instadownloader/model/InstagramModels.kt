@@ -128,6 +128,7 @@ data class DownloadedMediaMetadata(
     val shortcode: String = "",
     val sourceId: String = "",
     val highlightTitle: String = "",
+    val mediaIndex: Int = 0,
     val isVideo: Boolean = false,
 )
 
