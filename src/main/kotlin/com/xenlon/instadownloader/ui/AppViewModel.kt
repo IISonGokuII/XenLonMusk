@@ -27,6 +27,10 @@ import java.util.UUID
 
 class AppViewModel(private val appContext: Context) {
     private val maxVisibleQueueItems = 180
+    private val queueTopUpThreshold = 80
+    private val queueTopUpBatchSize = 220
+    @Volatile
+    private var isQueueTopUpInProgress = false
 
     private val instagramService = InstagramService(appContext)
     private val downloadManager = DownloadManager(instagramService, appContext)
@@ -758,6 +762,7 @@ class AppViewModel(private val appContext: Context) {
     private fun observeDownloadQueue() {
         scope.launch {
             workManager.getWorkInfosByTagFlow("insta_download_queue").collectLatest { workInfos ->
+                maybeTopUpQueue(workInfos)
                 _downloadQueue.value = workInfos
                     .sortedWith(
                         compareBy<WorkInfo> { it.state.sortPriority() }
@@ -765,6 +770,36 @@ class AppViewModel(private val appContext: Context) {
                     )
                     .take(maxVisibleQueueItems)
                     .map { info -> info.toQueueItem() }
+            }
+        }
+    }
+
+    private fun maybeTopUpQueue(workInfos: List<WorkInfo>) {
+        if (isQueueTopUpInProgress) return
+
+        val activeCount = workInfos.count {
+            it.state == WorkInfo.State.RUNNING ||
+                it.state == WorkInfo.State.ENQUEUED ||
+                it.state == WorkInfo.State.BLOCKED
+        }
+        val pendingCount = DownloadWorker.pendingDownloadCount(appContext)
+        if (pendingCount == 0 || activeCount > queueTopUpThreshold) return
+
+        isQueueTopUpInProgress = true
+        scope.launch(Dispatchers.IO) {
+            try {
+                val topUpDownloads = DownloadWorker.dequeuePendingDownloads(
+                    context = appContext,
+                    limit = queueTopUpBatchSize,
+                )
+                if (topUpDownloads.isNotEmpty()) {
+                    DownloadWorker.enqueueDownloads(
+                        context = appContext,
+                        downloads = topUpDownloads,
+                    )
+                }
+            } finally {
+                isQueueTopUpInProgress = false
             }
         }
     }

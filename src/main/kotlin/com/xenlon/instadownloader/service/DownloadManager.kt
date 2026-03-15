@@ -641,10 +641,22 @@ class DownloadManager(
 
         val queuedTasks = tasks.take(maxQueueSubmissionSize)
         val postponedCount = tasks.size - queuedTasks.size
+        val postponedTasks = tasks.drop(maxQueueSubmissionSize)
 
         DownloadWorker.enqueueDownloads(
             context = context,
             downloads = queuedTasks.map { task ->
+                DownloadWorker.Companion.PendingDownloadRequest(
+                    url = task.url,
+                    outputPath = task.outputPath,
+                    label = task.label,
+                    metadata = task.metadata,
+                )
+            },
+        )
+        DownloadWorker.appendPendingDownloads(
+            context = context,
+            downloads = postponedTasks.map { task ->
                 DownloadWorker.Companion.PendingDownloadRequest(
                     url = task.url,
                     outputPath = task.outputPath,
@@ -661,7 +673,7 @@ class DownloadManager(
                 append(queuedTasks.size)
                 append(" jetzt, ")
                 append(postponedCount)
-                append(" vorerst ausgelassen)")
+                append(" folgen automatisch)")
             }
         }
 

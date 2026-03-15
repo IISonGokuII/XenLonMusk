@@ -32,8 +32,11 @@ class DownloadWorker(
         const val KEY_METADATA = "metadata"
         private const val UNIQUE_QUEUE_NAME = "insta_download_queue"
         private const val QUEUE_PREFS = "download_queue_registry"
+        private const val BACKLOG_PREFS = "download_queue_backlog"
+        private const val BACKLOG_KEY = "pending_downloads"
         private const val ENQUEUE_CHAIN_CHUNK_SIZE = 25
         private val json = Json { ignoreUnknownKeys = true }
+        private val backlogLock = Any()
 
         @kotlinx.serialization.Serializable
         data class QueuePayload(
@@ -43,6 +46,7 @@ class DownloadWorker(
             val metadataJson: String,
         )
 
+        @kotlinx.serialization.Serializable
         data class PendingDownloadRequest(
             val url: String,
             val outputPath: String,
@@ -146,6 +150,56 @@ class DownloadWorker(
                 .edit()
                 .remove(workId)
                 .apply()
+        }
+
+        fun appendPendingDownloads(
+            context: Context,
+            downloads: List<PendingDownloadRequest>,
+        ) {
+            if (downloads.isEmpty()) return
+            synchronized(backlogLock) {
+                val prefs = context.getSharedPreferences(BACKLOG_PREFS, Context.MODE_PRIVATE)
+                val existing = prefs.getString(BACKLOG_KEY, null)
+                    ?.let { raw -> runCatching { json.decodeFromString<List<PendingDownloadRequest>>(raw) }.getOrDefault(emptyList()) }
+                    .orEmpty()
+                prefs.edit()
+                    .putString(BACKLOG_KEY, json.encodeToString(existing + downloads))
+                    .apply()
+            }
+        }
+
+        fun dequeuePendingDownloads(
+            context: Context,
+            limit: Int,
+        ): List<PendingDownloadRequest> {
+            if (limit <= 0) return emptyList()
+            synchronized(backlogLock) {
+                val prefs = context.getSharedPreferences(BACKLOG_PREFS, Context.MODE_PRIVATE)
+                val existing = prefs.getString(BACKLOG_KEY, null)
+                    ?.let { raw -> runCatching { json.decodeFromString<List<PendingDownloadRequest>>(raw) }.getOrDefault(emptyList()) }
+                    .orEmpty()
+                if (existing.isEmpty()) return emptyList()
+
+                val selected = existing.take(limit)
+                val remaining = existing.drop(limit)
+                prefs.edit().apply {
+                    if (remaining.isEmpty()) {
+                        remove(BACKLOG_KEY)
+                    } else {
+                        putString(BACKLOG_KEY, json.encodeToString(remaining))
+                    }
+                }.apply()
+                return selected
+            }
+        }
+
+        fun pendingDownloadCount(context: Context): Int {
+            synchronized(backlogLock) {
+                val raw = context.getSharedPreferences(BACKLOG_PREFS, Context.MODE_PRIVATE)
+                    .getString(BACKLOG_KEY, null)
+                    ?: return 0
+                return runCatching { json.decodeFromString<List<PendingDownloadRequest>>(raw).size }.getOrDefault(0)
+            }
         }
 
         private fun persistQueuePayload(context: Context, workId: String, payload: QueuePayload) {
