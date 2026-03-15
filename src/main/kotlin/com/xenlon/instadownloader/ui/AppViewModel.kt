@@ -31,6 +31,7 @@ class AppViewModel(private val appContext: Context) {
     private val queueTopUpBatchSize = 220
     @Volatile
     private var isQueueTopUpInProgress = false
+    private var lastObservedCompletedQueueCount = 0
 
     private val instagramService = InstagramService(appContext)
     private val downloadManager = DownloadManager(instagramService, appContext)
@@ -763,6 +764,11 @@ class AppViewModel(private val appContext: Context) {
         scope.launch {
             workManager.getWorkInfosByTagFlow("insta_download_queue").collectLatest { workInfos ->
                 maybeTopUpQueue(workInfos)
+                val completedCount = workInfos.count { it.state == WorkInfo.State.SUCCEEDED }
+                if (completedCount != lastObservedCompletedQueueCount) {
+                    lastObservedCompletedQueueCount = completedCount
+                    loadGalleryItems()
+                }
                 _downloadQueue.value = workInfos
                     .sortedWith(
                         compareBy<WorkInfo> { it.state.sortPriority() }

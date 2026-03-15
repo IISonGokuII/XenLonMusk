@@ -64,6 +64,7 @@ class DownloadManager(
                 _downloadProgress.collectLatest { progress ->
                     when (progress) {
                         is DownloadProgress.Downloading -> DownloadForegroundService.startOrUpdate(context, progress)
+                        is DownloadProgress.Queued -> DownloadForegroundService.startOrUpdate(context, progress)
                         is DownloadProgress.Complete,
                         is DownloadProgress.Error,
                         DownloadProgress.Idle -> DownloadForegroundService.stop(context)
@@ -629,7 +630,7 @@ class DownloadManager(
         outputPaths: List<String> = tasks.map { it.outputPath },
     ): DownloadResult<List<String>> {
         if (tasks.isEmpty()) {
-            _downloadProgress.value = DownloadProgress.Complete(0, "$label - nichts neu")
+            _downloadProgress.value = DownloadProgress.Queued(0, "$label - nichts neu")
             return DownloadResult.Success(outputPaths)
         }
 
@@ -677,7 +678,7 @@ class DownloadManager(
             }
         }
 
-        _downloadProgress.value = DownloadProgress.Complete(queuedTasks.size, progressLabel)
+        _downloadProgress.value = DownloadProgress.Queued(queuedTasks.size, progressLabel)
         val queuedOutputPaths = queuedTasks.map { it.outputPath }
         return DownloadResult.Success(queuedOutputPaths.ifEmpty { outputPaths })
     }
@@ -750,6 +751,7 @@ class DownloadManager(
 sealed class DownloadProgress {
     data object Idle : DownloadProgress()
     data class Downloading(val current: Int, val total: Int, val label: String) : DownloadProgress()
+    data class Queued(val count: Int, val label: String) : DownloadProgress()
     data class Complete(val count: Int, val label: String) : DownloadProgress()
     data class Error(val message: String) : DownloadProgress()
 }

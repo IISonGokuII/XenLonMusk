@@ -2292,6 +2292,7 @@ private fun DownloadProgressCard(progress: DownloadProgress) {
         shape = RoundedCornerShape(16.dp),
         colors = CardDefaults.cardColors(
             containerColor = when (progress) {
+                is DownloadProgress.Queued -> Color(0xFF1A243D)
                 is DownloadProgress.Complete -> Color(0xFF1A3D1A)
                 is DownloadProgress.Error -> Color(0xFF3D1A1A)
                 else -> DarkSurface
@@ -2323,6 +2324,15 @@ private fun DownloadProgressCard(progress: DownloadProgress) {
                             trackColor = DarkSurfaceVariant
                         )
                     }
+                }
+                is DownloadProgress.Queued -> {
+                    Icon(Icons.Default.Queue, contentDescription = null, tint = AccentPurple)
+                    Spacer(modifier = Modifier.width(12.dp))
+                    Text(
+                        "${progress.count} Elemente zur Download-Queue hinzugefuegt. Die Dateien erscheinen, sobald die Worker fertig sind.",
+                        color = AccentPurple,
+                        fontWeight = FontWeight.Medium
+                    )
                 }
                 is DownloadProgress.Complete -> {
                     Icon(Icons.Default.CheckCircle, contentDescription = null, tint = SuccessGreen)

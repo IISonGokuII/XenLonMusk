@@ -107,6 +107,13 @@ class DownloadForegroundService : Service() {
                     progress.total,
                     false,
                 )
+                is DownloadProgress.Queued -> listOf(
+                    "Download-Queue",
+                    progress.label,
+                    0,
+                    0,
+                    true,
+                )
                 is DownloadProgress.Complete -> listOf(
                     "Download abgeschlossen",
                     "${progress.count} ${progress.label}",
