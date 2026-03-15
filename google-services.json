@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "809010840866",
+    "project_id": "instadownloader-2ca4d",
+    "storage_bucket": "instadownloader-2ca4d.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:809010840866:android:8398a76a0ebb6760a8517b",
+        "android_client_info": {
+          "package_name": "com.instadown.app"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDwS2zJ-gAzBl2ZOMp2grDsszj9btaCvxs"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

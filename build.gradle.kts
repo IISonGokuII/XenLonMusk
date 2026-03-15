@@ -2,6 +2,8 @@ plugins {
     id("com.android.application") version "8.2.2"
     kotlin("android") version "1.9.22"
     kotlin("plugin.serialization") version "1.9.22"
+    id("com.google.gms.google-services") version "4.4.4"
+    id("com.google.firebase.crashlytics") version "3.0.6"
 }
 
 android {
@@ -9,7 +11,7 @@ android {
     compileSdk = 34
 
     defaultConfig {
-        applicationId = "com.xenlon.instadownloader"
+        applicationId = "com.instadown.app"
         minSdk = 26
         targetSdk = 34
         versionCode = 1
@@ -31,6 +33,9 @@ android {
     }
 
     buildTypes {
+        debug {
+            isMinifyEnabled = false
+        }
         release {
             isMinifyEnabled = true
             isShrinkResources = true
@@ -59,9 +64,12 @@ android {
 }
 
 dependencies {
+    implementation(platform("com.google.firebase:firebase-bom:34.7.0"))
+
     // AndroidX Core
     implementation("androidx.core:core-ktx:1.12.0")
     implementation("androidx.activity:activity-compose:1.8.2")
+    implementation("androidx.fragment:fragment-ktx:1.6.2")
 
     // Compose BOM (manages all Compose library versions)
     implementation(platform("androidx.compose:compose-bom:2024.02.00"))
@@ -79,7 +87,16 @@ dependencies {
     implementation("io.ktor:ktor-serialization-kotlinx-json:2.3.7")
 
     // JSON Serialization
-    implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.6.2")
+    implementation("org.jetbrains.kotlinx:kotlinx-serialization-core") {
+        version {
+            strictly("1.6.2")
+        }
+    }
+    implementation("org.jetbrains.kotlinx:kotlinx-serialization-json") {
+        version {
+            strictly("1.6.2")
+        }
+    }
 
     // Image loading (for in-app gallery)
     implementation("io.coil-kt:coil-compose:2.5.0")
@@ -91,6 +108,9 @@ dependencies {
 
     // WorkManager for background downloads
     implementation("androidx.work:work-runtime-ktx:2.9.0")
+
+    // Firebase Crashlytics
+    implementation("com.google.firebase:firebase-crashlytics")
 
     // Coroutines
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.7.3")
