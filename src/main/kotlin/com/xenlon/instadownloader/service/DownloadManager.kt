@@ -47,6 +47,7 @@ class DownloadManager(
 
     private val dateFormat = SimpleDateFormat("yyyy-MM-dd_HH-mm-ss", Locale.getDefault())
     private val metadataJson = Json { ignoreUnknownKeys = true }
+    private val maxQueueSubmissionSize = 400
     var onlyNewDownloads: Boolean = true
 
     private data class QueuedDownloadTask(
@@ -638,18 +639,35 @@ class DownloadManager(
             return DownloadResult.Error("Queue nicht verfuegbar")
         }
 
-        tasks.forEach { task ->
-            DownloadWorker.enqueueDownload(
-                context = context,
-                url = task.url,
-                outputPath = task.outputPath,
-                label = task.label,
-                metadata = task.metadata,
-            )
+        val queuedTasks = tasks.take(maxQueueSubmissionSize)
+        val postponedCount = tasks.size - queuedTasks.size
+
+        DownloadWorker.enqueueDownloads(
+            context = context,
+            downloads = queuedTasks.map { task ->
+                DownloadWorker.Companion.PendingDownloadRequest(
+                    url = task.url,
+                    outputPath = task.outputPath,
+                    label = task.label,
+                    metadata = task.metadata,
+                )
+            },
+        )
+
+        val progressLabel = buildString {
+            append("$label zur Queue hinzugefuegt")
+            if (postponedCount > 0) {
+                append(" (")
+                append(queuedTasks.size)
+                append(" jetzt, ")
+                append(postponedCount)
+                append(" vorerst ausgelassen)")
+            }
         }
 
-        _downloadProgress.value = DownloadProgress.Complete(tasks.size, "$label zur Queue hinzugefuegt")
-        return DownloadResult.Success(outputPaths)
+        _downloadProgress.value = DownloadProgress.Complete(queuedTasks.size, progressLabel)
+        val queuedOutputPaths = queuedTasks.map { it.outputPath }
+        return DownloadResult.Success(queuedOutputPaths.ifEmpty { outputPaths })
     }
 
     private fun buildExistingIndex(downloadDir: String): ExistingDownloadIndex {

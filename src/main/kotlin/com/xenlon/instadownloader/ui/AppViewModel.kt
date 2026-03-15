@@ -26,6 +26,7 @@ import java.util.Locale
 import java.util.UUID
 
 class AppViewModel(private val appContext: Context) {
+    private val maxVisibleQueueItems = 180
 
     private val instagramService = InstagramService(appContext)
     private val downloadManager = DownloadManager(instagramService, appContext)
@@ -758,10 +759,23 @@ class AppViewModel(private val appContext: Context) {
         scope.launch {
             workManager.getWorkInfosByTagFlow("insta_download_queue").collectLatest { workInfos ->
                 _downloadQueue.value = workInfos
-                    .sortedByDescending { it.runAttemptCount }
+                    .sortedWith(
+                        compareBy<WorkInfo> { it.state.sortPriority() }
+                            .thenByDescending { it.runAttemptCount }
+                    )
+                    .take(maxVisibleQueueItems)
                     .map { info -> info.toQueueItem() }
             }
         }
+    }
+
+    private fun WorkInfo.State.sortPriority(): Int = when (this) {
+        WorkInfo.State.RUNNING -> 0
+        WorkInfo.State.ENQUEUED -> 1
+        WorkInfo.State.BLOCKED -> 2
+        WorkInfo.State.FAILED -> 3
+        WorkInfo.State.CANCELLED -> 4
+        WorkInfo.State.SUCCEEDED -> 5
     }
 
     private fun WorkInfo.toQueueItem(): DownloadQueueItem {

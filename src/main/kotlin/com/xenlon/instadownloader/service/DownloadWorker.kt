@@ -32,6 +32,7 @@ class DownloadWorker(
         const val KEY_METADATA = "metadata"
         private const val UNIQUE_QUEUE_NAME = "insta_download_queue"
         private const val QUEUE_PREFS = "download_queue_registry"
+        private const val ENQUEUE_CHAIN_CHUNK_SIZE = 25
         private val json = Json { ignoreUnknownKeys = true }
 
         @kotlinx.serialization.Serializable
@@ -40,6 +41,13 @@ class DownloadWorker(
             val outputPath: String,
             val label: String,
             val metadataJson: String,
+        )
+
+        data class PendingDownloadRequest(
+            val url: String,
+            val outputPath: String,
+            val label: String,
+            val metadata: DownloadedMediaMetadata? = null,
         )
 
         fun createNotificationChannel(context: Context) {
@@ -64,40 +72,66 @@ class DownloadWorker(
             label: String,
             metadata: DownloadedMediaMetadata? = null,
         ): java.util.UUID {
+            return enqueueDownloads(
+                context = context,
+                downloads = listOf(PendingDownloadRequest(url, outputPath, label, metadata)),
+            ).first()
+        }
+
+        fun enqueueDownloads(
+            context: Context,
+            downloads: List<PendingDownloadRequest>,
+        ): List<java.util.UUID> {
+            if (downloads.isEmpty()) return emptyList()
             createNotificationChannel(context)
 
-            val data = workDataOf(
-                KEY_DOWNLOAD_URL to url,
-                KEY_OUTPUT_PATH to outputPath,
-                KEY_LABEL to label,
-                KEY_METADATA to metadata?.let { json.encodeToString(it) }.orEmpty(),
-            )
+            val requests = downloads.map { download ->
+                val metadataJson = download.metadata?.let { json.encodeToString(it) }.orEmpty()
+                val request = OneTimeWorkRequestBuilder<DownloadWorker>()
+                    .setInputData(
+                        workDataOf(
+                            KEY_DOWNLOAD_URL to download.url,
+                            KEY_OUTPUT_PATH to download.outputPath,
+                            KEY_LABEL to download.label,
+                            KEY_METADATA to metadataJson,
+                        )
+                    )
+                    .setConstraints(
+                        Constraints.Builder()
+                            .setRequiredNetworkType(NetworkType.CONNECTED)
+                            .build()
+                    )
+                    .addTag(UNIQUE_QUEUE_NAME)
+                    .build()
 
-            val request = OneTimeWorkRequestBuilder<DownloadWorker>()
-                .setInputData(data)
-                .setConstraints(
-                    Constraints.Builder()
-                        .setRequiredNetworkType(NetworkType.CONNECTED)
-                        .build()
+                persistQueuePayload(
+                    context = context,
+                    workId = request.id.toString(),
+                    payload = QueuePayload(
+                        sourceUrl = download.url,
+                        outputPath = download.outputPath,
+                        label = download.label,
+                        metadataJson = metadataJson,
+                    )
                 )
-                .addTag(UNIQUE_QUEUE_NAME)
-                .build()
+                request
+            }
 
-            persistQueuePayload(
-                context = context,
-                workId = request.id.toString(),
-                payload = QueuePayload(
-                    sourceUrl = url,
-                    outputPath = outputPath,
-                    label = label,
-                    metadataJson = metadata?.let { json.encodeToString(it) }.orEmpty(),
-                )
+            val workManager = WorkManager.getInstance(context)
+            var continuation = workManager.beginUniqueWork(
+                UNIQUE_QUEUE_NAME,
+                ExistingWorkPolicy.APPEND_OR_REPLACE,
+                requests.first(),
             )
+            requests
+                .drop(1)
+                .chunked(ENQUEUE_CHAIN_CHUNK_SIZE)
+                .forEach { chunk ->
+                    continuation = continuation.then(chunk)
+                }
+            continuation.enqueue()
 
-            WorkManager.getInstance(context)
-                .beginUniqueWork(UNIQUE_QUEUE_NAME, ExistingWorkPolicy.APPEND_OR_REPLACE, request)
-                .enqueue()
-            return request.id
+            return requests.map { it.id }
         }
 
         fun getQueuePayload(context: Context, workId: String): QueuePayload? {
