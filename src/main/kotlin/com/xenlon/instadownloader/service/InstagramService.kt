@@ -11,6 +11,7 @@ import io.ktor.client.request.forms.*
 import io.ktor.client.statement.*
 import io.ktor.http.*
 import io.ktor.util.date.GMTDate
+import io.ktor.utils.io.jvm.javaio.toInputStream
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.runBlocking
@@ -1475,15 +1476,19 @@ class InstagramService(
                     "Download fehlgeschlagen (HTTP ${response.status.value})",
                     response.status.value
                 )
-            }
+              }
 
-            val file = java.io.File(outputPath)
-            file.parentFile?.mkdirs()
-            file.writeBytes(response.readBytes())
+              val file = java.io.File(outputPath)
+              file.parentFile?.mkdirs()
+              response.bodyAsChannel().toInputStream().use { input ->
+                  file.outputStream().buffered().use { output ->
+                      input.copyTo(output)
+                  }
+              }
 
-            DownloadResult.Success(outputPath)
-        } catch (e: Exception) {
-            DownloadResult.Error("Download-Fehler: ${e.message}")
+              DownloadResult.Success(outputPath)
+          } catch (e: Exception) {
+              DownloadResult.Error("Download-Fehler: ${e.message}")
         }
     }
 
