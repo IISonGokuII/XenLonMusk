@@ -6,6 +6,7 @@ import android.app.NotificationManager
 import android.app.Service
 import android.content.Context
 import android.content.Intent
+import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
 import androidx.core.app.NotificationCompat
@@ -32,7 +33,15 @@ class DownloadForegroundService : Service() {
                 val notification = buildNotification(title, text, indeterminate, current, total)
 
                 if (intent.action == ACTION_START) {
-                    startForeground(NOTIFICATION_ID, notification)
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                        startForeground(
+                            NOTIFICATION_ID,
+                            notification,
+                            ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC,
+                        )
+                    } else {
+                        startForeground(NOTIFICATION_ID, notification)
+                    }
                 } else {
                     val manager = getSystemService(NotificationManager::class.java)
                     manager.notify(NOTIFICATION_ID, notification)
