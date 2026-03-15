@@ -644,6 +644,13 @@ class DownloadManager(
         val postponedCount = tasks.size - queuedTasks.size
         val postponedTasks = tasks.drop(maxQueueSubmissionSize)
 
+        DiagnosticsReporter.logQueueEnqueued(
+            label = label,
+            queuedCount = queuedTasks.size,
+            postponedCount = postponedCount,
+            downloadDir = getDownloadDir(),
+        )
+
         DownloadWorker.enqueueDownloads(
             context = context,
             downloads = queuedTasks.map { task ->

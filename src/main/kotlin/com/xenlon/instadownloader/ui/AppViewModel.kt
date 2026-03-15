@@ -13,6 +13,7 @@ import com.xenlon.instadownloader.model.*
 import com.xenlon.instadownloader.service.DownloadManager
 import com.xenlon.instadownloader.service.DownloadProgress
 import com.xenlon.instadownloader.service.DownloadWorker
+import com.xenlon.instadownloader.service.DiagnosticsReporter
 import com.xenlon.instadownloader.service.InstagramService
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -561,6 +562,7 @@ class AppViewModel(private val appContext: Context) {
             val dir = File(downloadManager.getDownloadDir())
             if (!dir.exists()) {
                 _galleryItems.value = emptyList()
+                DiagnosticsReporter.logGalleryScan(dir.absolutePath, 0)
                 return@launch
             }
 
@@ -601,6 +603,7 @@ class AppViewModel(private val appContext: Context) {
                 .toList()
 
             _galleryItems.value = items
+            DiagnosticsReporter.logGalleryScan(dir.absolutePath, items.size)
         }
     }
 

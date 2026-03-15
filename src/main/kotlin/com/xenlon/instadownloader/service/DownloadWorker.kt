@@ -222,6 +222,7 @@ class DownloadWorker(
         try {
             // Show progress notification
             setForeground(createForegroundInfo(label, 0))
+            DiagnosticsReporter.logWorkerStart(label, outputPath, url)
 
             val service = InstagramService(applicationContext)
             val result = service.downloadFile(url, outputPath)
@@ -230,15 +231,33 @@ class DownloadWorker(
             when (result) {
                 is DownloadResult.Success -> {
                     metadata?.let { writeMetadata(outputPath, it) }
+                    val downloadedFile = java.io.File(outputPath)
+                    if (!downloadedFile.exists() || downloadedFile.length() <= 0L) {
+                        DiagnosticsReporter.logMissingDownloadedFile(label, outputPath)
+                        showErrorNotification(label)
+                        return@withContext Result.failure()
+                    }
+                    DiagnosticsReporter.logWorkerSuccess(label, outputPath)
                     showCompleteNotification(label)
                     Result.success(workDataOf("output_path" to outputPath))
                 }
                 else -> {
+                    DiagnosticsReporter.logWorkerFailure(
+                        label = label,
+                        outputPath = outputPath,
+                        reason = (result as? DownloadResult.Error)?.message ?: "Unknown download result",
+                    )
                     showErrorNotification(label)
                     Result.failure()
                 }
             }
         } catch (e: Exception) {
+            DiagnosticsReporter.logWorkerFailure(
+                label = label,
+                outputPath = outputPath,
+                reason = e.message ?: e::class.java.simpleName,
+                throwable = e,
+            )
             showErrorNotification(label)
             Result.failure()
         }
