@@ -189,6 +189,53 @@ class InstagramService(
         private const val SESSION_COOKIES_KEY = "session_cookies"
         private const val SESSION_USERNAME_KEY = "session_username"
 
+        /**
+         * Lightweight CDN download - no session, no throttling, no cookie storage needed.
+         * Use this for DownloadWorker to avoid creating a full InstagramService per download.
+         */
+        suspend fun downloadCdnFile(url: String, outputPath: String): DownloadResult<String> = withContext(Dispatchers.IO) {
+            val cdnClient = HttpClient(OkHttp) {
+                install(HttpTimeout) {
+                    requestTimeoutMillis = 60_000
+                    connectTimeoutMillis = 15_000
+                }
+            }
+            try {
+                val response = cdnClient.get(url) {
+                    headers {
+                        append(HttpHeaders.UserAgent, USER_AGENTS.random())
+                        append(HttpHeaders.Accept, "image/webp,image/apng,image/*,video/*,*/*;q=0.8")
+                        append(HttpHeaders.AcceptLanguage, "de-DE,de;q=0.9,en-US;q=0.8,en;q=0.7")
+                        append(HttpHeaders.Referrer, "https://www.instagram.com/")
+                        append("Sec-Fetch-Dest", "image")
+                        append("Sec-Fetch-Mode", "no-cors")
+                        append("Sec-Fetch-Site", "cross-site")
+                    }
+                }
+
+                if (response.status != HttpStatusCode.OK) {
+                    return@withContext DownloadResult.Error(
+                        "Download fehlgeschlagen (HTTP ${response.status.value})",
+                        response.status.value
+                    )
+                }
+
+                val file = java.io.File(outputPath)
+                file.parentFile?.mkdirs()
+                response.bodyAsChannel().toInputStream().use { input ->
+                    file.outputStream().buffered().use { output ->
+                        input.copyTo(output)
+                    }
+                }
+
+                DownloadResult.Success(outputPath)
+            } catch (e: Exception) {
+                DownloadResult.Error("Download-Fehler: ${e.message}")
+            } finally {
+                cdnClient.close()
+            }
+        }
+
         private val USER_AGENTS = listOf(
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
             "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
@@ -1484,11 +1531,17 @@ class InstagramService(
 
     /**
      * Downloads a file from a URL and saves it to the specified path.
+     * CDN downloads (images/videos) are NOT throttled - they go to Instagram's CDN
+     * servers (scontent-*.cdninstagram.com), not the API, so they don't trigger
+     * automated behavior detection.
      */
     suspend fun downloadFile(url: String, outputPath: String): DownloadResult<String> = withContext(Dispatchers.IO) {
         try {
-            val response = throttledRequest("Datei herunterladen", "Mediendownload") {
-                client.get(url) {
+            val response = client.get(url) {
+                timeout {
+                    requestTimeoutMillis = 60_000
+                    connectTimeoutMillis = 15_000
+                }
                 headers {
                     append(HttpHeaders.UserAgent, sessionUserAgent)
                     append(HttpHeaders.Accept, "image/webp,image/apng,image/*,video/*,*/*;q=0.8")
@@ -1497,7 +1550,6 @@ class InstagramService(
                     append("Sec-Fetch-Dest", "image")
                     append("Sec-Fetch-Mode", "no-cors")
                     append("Sec-Fetch-Site", "cross-site")
-                }
                 }
             }
 
@@ -1525,4 +1577,5 @@ class InstagramService(
     fun close() {
         client.close()
     }
+
 }

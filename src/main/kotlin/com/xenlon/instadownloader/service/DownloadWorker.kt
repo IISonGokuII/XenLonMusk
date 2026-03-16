@@ -121,16 +121,13 @@ class DownloadWorker(
                 request
             }
 
+            // Enqueue downloads as independent parallel work items instead of a
+            // sequential chain. CDN downloads don't need throttling and can run
+            // concurrently for much faster batch downloads.
             val workManager = WorkManager.getInstance(context)
-            var continuation = workManager.beginUniqueWork(
-                UNIQUE_QUEUE_NAME,
-                ExistingWorkPolicy.APPEND_OR_REPLACE,
-                requests.first(),
-            )
-            requests.drop(1).forEach { request ->
-                continuation = continuation.then(request)
+            requests.forEach { request ->
+                workManager.enqueue(request)
             }
-            continuation.enqueue()
 
             return requests.map { it.id }
         }
@@ -220,9 +217,7 @@ class DownloadWorker(
             setForeground(createForegroundInfo(label, 0))
             DiagnosticsReporter.logWorkerStart(label, outputPath, url)
 
-            val service = InstagramService(applicationContext)
-            val result = service.downloadFile(url, outputPath)
-            service.close()
+            val result = InstagramService.downloadCdnFile(url, outputPath)
 
             when (result) {
                 is DownloadResult.Success -> {
