@@ -47,7 +47,7 @@ class DownloadManager(
 
     private val dateFormat = SimpleDateFormat("yyyy-MM-dd_HH-mm-ss", Locale.getDefault())
     private val metadataJson = Json { ignoreUnknownKeys = true }
-    private val maxQueueSubmissionSize = 400
+    private val maxQueueSubmissionSize = 120
     var onlyNewDownloads: Boolean = true
 
     private data class QueuedDownloadTask(

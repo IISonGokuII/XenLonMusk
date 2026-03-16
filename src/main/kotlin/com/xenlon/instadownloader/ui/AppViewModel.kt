@@ -27,9 +27,9 @@ import java.util.Locale
 import java.util.UUID
 
 class AppViewModel(private val appContext: Context) {
-    private val maxVisibleQueueItems = 180
-    private val queueTopUpThreshold = 80
-    private val queueTopUpBatchSize = 220
+    private val maxVisibleQueueItems = 80
+    private val queueTopUpThreshold = 24
+    private val queueTopUpBatchSize = 60
     @Volatile
     private var isQueueTopUpInProgress = false
     private var lastObservedCompletedQueueCount = 0

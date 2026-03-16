@@ -35,7 +35,6 @@ class DownloadWorker(
         private const val QUEUE_PREFS = "download_queue_registry"
         private const val BACKLOG_PREFS = "download_queue_backlog"
         private const val BACKLOG_KEY = "pending_downloads"
-        private const val ENQUEUE_CHAIN_CHUNK_SIZE = 25
         private val json = Json { ignoreUnknownKeys = true }
         private val backlogLock = Any()
 
@@ -128,12 +127,9 @@ class DownloadWorker(
                 ExistingWorkPolicy.APPEND_OR_REPLACE,
                 requests.first(),
             )
-            requests
-                .drop(1)
-                .chunked(ENQUEUE_CHAIN_CHUNK_SIZE)
-                .forEach { chunk ->
-                    continuation = continuation.then(chunk)
-                }
+            requests.drop(1).forEach { request ->
+                continuation = continuation.then(request)
+            }
             continuation.enqueue()
 
             return requests.map { it.id }
