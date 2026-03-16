@@ -120,6 +120,7 @@ fun MainScreen(
     onHandleClipboardUrl: () -> Unit = {},
     onDismissClipboardUrl: () -> Unit = {},
     onLogout: () -> Unit,
+    onOpenQueue: () -> Unit = {},
     onOpenGallery: () -> Unit
 ) {
     var searchQuery by remember { mutableStateOf("") }
@@ -165,6 +166,9 @@ fun MainScreen(
             actions = {
                 IconButton(onClick = onOpenGallery) {
                     Icon(Icons.Default.PhotoLibrary, "Galerie", tint = TextSecondary)
+                }
+                IconButton(onClick = onOpenQueue) {
+                    Icon(Icons.Default.PendingActions, "Queue", tint = TextSecondary)
                 }
                 IconButton(onClick = onLogout) {
                     Icon(Icons.AutoMirrored.Filled.Logout, "Abmelden", tint = TextSecondary)
@@ -392,13 +396,9 @@ fun MainScreen(
             }
 
             if (downloadQueue.isNotEmpty()) {
-                DownloadQueueCard(
+                DownloadQueueSummaryCard(
                     queueItems = downloadQueue,
-                    onRetryItem = onRetryQueueItem,
-                    onCancelItem = onCancelQueueItem,
-                    onRetryFailedItems = onRetryFailedQueueItems,
-                    onCancelActiveItems = onCancelActiveQueueItems,
-                    onClearFinishedItems = onClearFinishedQueueItems
+                    onOpenQueue = onOpenQueue
                 )
             }
 
@@ -2797,6 +2797,62 @@ private fun QueueSummaryChip(
                     .background(accent)
             )
             Text("$label $count", color = TextPrimary, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+        }
+    }
+}
+
+@Composable
+private fun DownloadQueueSummaryCard(
+    queueItems: List<DownloadQueueItem>,
+    onOpenQueue: () -> Unit,
+) {
+    val waiting = queueItems.count { it.status == DownloadQueueStatus.WAITING }
+    val running = queueItems.count { it.status == DownloadQueueStatus.RUNNING }
+    val completed = queueItems.count { it.status == DownloadQueueStatus.COMPLETED }
+    val failed = queueItems.count { it.status == DownloadQueueStatus.FAILED || it.status == DownloadQueueStatus.CANCELLED }
+
+    Card(
+        shape = RoundedCornerShape(18.dp),
+        colors = CardDefaults.cardColors(containerColor = DarkSurface)
+    ) {
+        Column(
+            modifier = Modifier.padding(18.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Icon(Icons.Default.PendingActions, contentDescription = null, tint = AccentPurple)
+                    Column {
+                        Text("Download-Queue", color = TextPrimary, fontWeight = FontWeight.Bold)
+                        Text(
+                            "$running laeuft, $waiting wartet, $failed Fehler, $completed fertig",
+                            color = TextSecondary,
+                            fontSize = 12.sp
+                        )
+                    }
+                }
+                AssistChip(
+                    onClick = onOpenQueue,
+                    label = { Text("Oeffnen") }
+                )
+            }
+
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                QueueSummaryChip("Aktiv", running + waiting, AccentPink)
+                QueueSummaryChip("Fehler", failed, WarningOrange)
+                QueueSummaryChip("Fertig", completed, SuccessGreen)
+            }
+
+            Text(
+                "Die komplette Queue liegt jetzt auf einer eigenen Seite, damit die Hauptansicht nicht endlos lang wird.",
+                color = TextSecondary,
+                fontSize = 12.sp,
+                lineHeight = 17.sp
+            )
         }
     }
 }

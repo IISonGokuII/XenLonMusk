@@ -931,13 +931,13 @@ class InstagramService(
             var maxId: String? = null
             var hasMore = true
             var pageCount = 0
-            val maxPages = 20 // Safety limit to prevent infinite loops
+            val maxPages = 40 // Higher limit for larger profiles while keeping a hard safety cap
 
             while (hasMore && pageCount < maxPages) {
                 pageCount++
                 val response = throttledRequest("Posts laden", "Feed-Seite $pageCount") {
                     client.get("$BASE_URL/api/v1/feed/user/$effectiveUserId/") {
-                    parameter("count", "33")
+                    parameter("count", "50")
                     if (maxId != null) parameter("max_id", maxId)
                     if (isLoggedIn) addAuthHeaders("$BASE_URL/$username/")
                     else addAnonHeaders("$BASE_URL/$username/")
@@ -971,7 +971,7 @@ class InstagramService(
                 if (newMaxId == maxId) break // Prevent infinite loop with same max_id
                 maxId = newMaxId
 
-                if (allPosts.size >= 500) break
+                if (allPosts.size >= 1200) break
             }
 
             DownloadResult.Success(allPosts)

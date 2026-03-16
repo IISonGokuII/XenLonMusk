@@ -44,7 +44,7 @@ class AppViewModel(private val appContext: Context) {
     private val fileNameTimestampFormat = SimpleDateFormat("yyyy-MM-dd_HH-mm-ss", Locale.getDefault())
 
     // Screen state
-    enum class Screen { LOGIN, MAIN, GALLERY }
+    enum class Screen { LOGIN, MAIN, GALLERY, QUEUE }
 
     private val _currentScreen = MutableStateFlow(Screen.LOGIN)
     val currentScreen: StateFlow<Screen> = _currentScreen.asStateFlow()
@@ -554,6 +554,14 @@ class AppViewModel(private val appContext: Context) {
     }
 
     fun closeGallery() {
+        _currentScreen.value = Screen.MAIN
+    }
+
+    fun openQueue() {
+        _currentScreen.value = Screen.QUEUE
+    }
+
+    fun closeQueue() {
         _currentScreen.value = Screen.MAIN
     }
 

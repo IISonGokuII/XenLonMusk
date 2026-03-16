@@ -136,6 +136,7 @@ class MainActivity : ComponentActivity() {
                             onHandleClipboardUrl = { viewModel.handleClipboardUrl() },
                             onDismissClipboardUrl = { viewModel.dismissClipboardUrl() },
                             onLogout = { viewModel.logout() },
+                            onOpenQueue = { viewModel.openQueue() },
                             onOpenGallery = { viewModel.openGallery() }
                         )
                     }
@@ -171,6 +172,18 @@ class MainActivity : ComponentActivity() {
                                     Toast.LENGTH_SHORT
                                 ).show()
                             }
+                        )
+                    }
+
+                    AppViewModel.Screen.QUEUE -> {
+                        QueueScreen(
+                            queueItems = downloadQueue,
+                            onBack = { viewModel.closeQueue() },
+                            onRetryItem = { viewModel.retryQueueItem(it) },
+                            onCancelItem = { viewModel.cancelQueueItem(it) },
+                            onRetryFailedItems = { viewModel.retryFailedQueueItems() },
+                            onCancelActiveItems = { viewModel.cancelActiveQueueItems() },
+                            onClearFinishedItems = { viewModel.clearFinishedQueueItems() }
                         )
                     }
                 }
