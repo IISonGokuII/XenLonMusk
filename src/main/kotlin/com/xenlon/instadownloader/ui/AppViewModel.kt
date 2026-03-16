@@ -776,9 +776,11 @@ class AppViewModel(private val appContext: Context) {
             workManager.getWorkInfosByTagFlow("insta_download_queue").collectLatest { workInfos ->
                 maybeTopUpQueue(workInfos)
                 val completedCount = workInfos.count { it.state == WorkInfo.State.SUCCEEDED }
-                if (completedCount != lastObservedCompletedQueueCount) {
+                if (completedCount != lastObservedCompletedQueueCount && _currentScreen.value == Screen.GALLERY) {
                     lastObservedCompletedQueueCount = completedCount
                     loadGalleryItems()
+                } else if (completedCount != lastObservedCompletedQueueCount) {
+                    lastObservedCompletedQueueCount = completedCount
                 }
                 _downloadQueue.value = workInfos
                     .sortedWith(
@@ -831,14 +833,19 @@ class AppViewModel(private val appContext: Context) {
     }
 
     private fun WorkInfo.toQueueItem(): DownloadQueueItem {
+        val payload = DownloadWorker.getQueuePayload(appContext, id.toString())
+        val outputPath = payload?.outputPath.orEmpty()
+        val hasUsableFile = outputPath.isNotBlank() && runCatching {
+            val file = File(outputPath)
+            file.exists() && file.length() > 0L
+        }.getOrDefault(false)
         val status = when (state) {
             WorkInfo.State.ENQUEUED, WorkInfo.State.BLOCKED -> DownloadQueueStatus.WAITING
             WorkInfo.State.RUNNING -> DownloadQueueStatus.RUNNING
-            WorkInfo.State.SUCCEEDED -> DownloadQueueStatus.COMPLETED
+            WorkInfo.State.SUCCEEDED -> if (hasUsableFile) DownloadQueueStatus.COMPLETED else DownloadQueueStatus.FAILED
             WorkInfo.State.FAILED -> DownloadQueueStatus.FAILED
             WorkInfo.State.CANCELLED -> DownloadQueueStatus.CANCELLED
         }
-        val payload = DownloadWorker.getQueuePayload(appContext, id.toString())
 
         return DownloadQueueItem(
             workId = id.toString(),
@@ -846,7 +853,7 @@ class AppViewModel(private val appContext: Context) {
                 ?: outputData.getString(DownloadWorker.KEY_LABEL)
                 ?: payload?.label
                 ?: "Download",
-            outputPath = payload?.outputPath.orEmpty(),
+            outputPath = outputPath,
             sourceUrl = payload?.sourceUrl.orEmpty(),
             status = status,
             metadataJson = payload?.metadataJson.orEmpty(),
