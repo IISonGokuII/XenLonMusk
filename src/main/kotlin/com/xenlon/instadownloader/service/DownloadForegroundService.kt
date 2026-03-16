@@ -97,54 +97,42 @@ class DownloadForegroundService : Service() {
             }
         }
 
+        private data class NotificationParams(
+            val title: String,
+            val text: String,
+            val current: Int,
+            val total: Int,
+            val indeterminate: Boolean,
+        )
+
         fun startOrUpdate(context: Context, progress: DownloadProgress) {
             createChannel(context)
-            val (title, text, current, total, indeterminate) = when (progress) {
-                is DownloadProgress.Downloading -> listOf(
-                    "InstaDownloader",
-                    progress.label,
-                    progress.current,
-                    progress.total,
-                    false,
+            val params = when (progress) {
+                is DownloadProgress.Downloading -> NotificationParams(
+                    "InstaDownloader", progress.label, progress.current, progress.total, false,
                 )
-                is DownloadProgress.Queued -> listOf(
-                    "Download-Queue",
-                    progress.label,
-                    0,
-                    0,
-                    true,
+                is DownloadProgress.Queued -> NotificationParams(
+                    "Download-Queue", progress.label, 0, 0, true,
                 )
-                is DownloadProgress.Complete -> listOf(
-                    "Download abgeschlossen",
-                    "${progress.count} ${progress.label}",
-                    0,
-                    0,
-                    true,
+                is DownloadProgress.Complete -> NotificationParams(
+                    "Download abgeschlossen", "${progress.count} ${progress.label}", 0, 0, true,
                 )
-                is DownloadProgress.Error -> listOf(
-                    "Download unterbrochen",
-                    progress.message,
-                    0,
-                    0,
-                    true,
+                is DownloadProgress.Error -> NotificationParams(
+                    "Download unterbrochen", progress.message, 0, 0, true,
                 )
-                DownloadProgress.Idle -> listOf(
-                    "InstaDownloader",
-                    "Wartet auf Downloads",
-                    0,
-                    0,
-                    true,
+                DownloadProgress.Idle -> NotificationParams(
+                    "InstaDownloader", "Wartet auf Downloads", 0, 0, true,
                 )
             }
 
             val action = if (progress is DownloadProgress.Downloading) ACTION_START else ACTION_UPDATE
             val intent = Intent(context, DownloadForegroundService::class.java).apply {
                 this.action = action
-                putExtra(EXTRA_TITLE, title as String)
-                putExtra(EXTRA_TEXT, text as String)
-                putExtra(EXTRA_CURRENT, current as Int)
-                putExtra(EXTRA_TOTAL, total as Int)
-                putExtra(EXTRA_INDETERMINATE, indeterminate as Boolean)
+                putExtra(EXTRA_TITLE, params.title)
+                putExtra(EXTRA_TEXT, params.text)
+                putExtra(EXTRA_CURRENT, params.current)
+                putExtra(EXTRA_TOTAL, params.total)
+                putExtra(EXTRA_INDETERMINATE, params.indeterminate)
             }
 
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {

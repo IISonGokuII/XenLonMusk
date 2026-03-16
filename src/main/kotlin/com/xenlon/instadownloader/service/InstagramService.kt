@@ -14,7 +14,7 @@ import io.ktor.util.date.GMTDate
 import io.ktor.utils.io.jvm.javaio.toInputStream
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -55,12 +55,13 @@ class InstagramService(
     private var csrfToken: String = ""
     private var isLoggedIn: Boolean = false
     private var sessionUserId: String = ""
+    private var wwwClaim: String = "0"
     var preferHD: Boolean = true
     private val requestMutex = Mutex()
     private val requestTimestamps = ArrayDeque<Long>()
-    private val minRequestSpacingMillis = 1200L
+    private val minRequestSpacingMillis = 2500L
     private val softBurstWindowMillis = 60_000L
-    private val softBurstLimit = 18
+    private val softBurstLimit = 10
     private var nextAllowedRequestAtMillis = 0L
     private val _requestHealth = MutableStateFlow(RequestHealthState())
     val requestHealth: StateFlow<RequestHealthState> = _requestHealth.asStateFlow()
@@ -79,7 +80,7 @@ class InstagramService(
 
     init {
         if (sessionPrefs != null) {
-            runBlocking {
+            kotlinx.coroutines.CoroutineScope(Dispatchers.IO).launch {
                 restorePersistedSession()
             }
         }
@@ -184,12 +185,21 @@ class InstagramService(
     companion object {
         private const val BASE_URL = "https://www.instagram.com"
         private const val LOGIN_URL = "$BASE_URL/accounts/login/ajax/"
-        private const val USER_AGENT =
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
         private const val IG_APP_ID = "936619743392459"
         private const val SESSION_COOKIES_KEY = "session_cookies"
         private const val SESSION_USERNAME_KEY = "session_username"
+
+        private val USER_AGENTS = listOf(
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:125.0) Gecko/20100101 Firefox/125.0",
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Safari/605.1.15",
+            "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+        )
     }
+
+    // Pick a consistent UA per session (not per request - that would be suspicious)
+    private val sessionUserAgent = USER_AGENTS.random()
 
     private suspend fun restorePersistedSession() {
         val prefs = sessionPrefs ?: return
@@ -306,6 +316,12 @@ class InstagramService(
         }
     }
 
+    private fun extractWwwClaim(response: HttpResponse) {
+        response.headers["x-ig-set-www-claim"]?.let { claim ->
+            if (claim.isNotBlank()) wwwClaim = claim
+        }
+    }
+
     private suspend fun updateHealthFromStatus(status: HttpStatusCode, responseLabel: String) {
         val now = System.currentTimeMillis()
         when (status) {
@@ -357,6 +373,7 @@ class InstagramService(
             try {
                 val response = block()
                 lastResponse = response
+                extractWwwClaim(response)
                 updateHealthFromStatus(response.status, responseLabel)
 
                 if (response.status == HttpStatusCode.TooManyRequests && attempt < 2) {
@@ -405,7 +422,7 @@ class InstagramService(
             val initialResponse = throttledRequest("Startseite laden", "Login vorbereiten") {
                 client.get(BASE_URL) {
                 headers {
-                    append(HttpHeaders.UserAgent, USER_AGENT)
+                    append(HttpHeaders.UserAgent, sessionUserAgent)
                     append(HttpHeaders.Accept, "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
                     append(HttpHeaders.AcceptLanguage, "de-DE,de;q=0.9,en-US;q=0.8,en;q=0.7")
                 }
@@ -433,7 +450,7 @@ class InstagramService(
             val loginResponse = throttledRequest("Login senden", "Instagram-Login") {
                 client.post(LOGIN_URL) {
                 headers {
-                    append(HttpHeaders.UserAgent, USER_AGENT)
+                    append(HttpHeaders.UserAgent, sessionUserAgent)
                     append(HttpHeaders.Accept, "*/*")
                     append(HttpHeaders.AcceptLanguage, "de-DE,de;q=0.9,en-US;q=0.8,en;q=0.7")
                     append(HttpHeaders.ContentType, "application/x-www-form-urlencoded")
@@ -530,7 +547,7 @@ class InstagramService(
             val response = throttledRequest("2FA senden", "Zwei-Faktor-Bestätigung") {
                 client.post("$BASE_URL/accounts/login/ajax/two_factor/") {
                 headers {
-                    append(HttpHeaders.UserAgent, USER_AGENT)
+                    append(HttpHeaders.UserAgent, sessionUserAgent)
                     append(HttpHeaders.Accept, "*/*")
                     append(HttpHeaders.AcceptLanguage, "de-DE,de;q=0.9,en-US;q=0.8,en;q=0.7")
                     append(HttpHeaders.ContentType, "application/x-www-form-urlencoded")
@@ -589,7 +606,7 @@ class InstagramService(
             val response = throttledRequest("2FA-SMS anfordern", "SMS-Code anfordern") {
                 client.post("$BASE_URL/accounts/send_two_factor_login_sms/") {
                 headers {
-                    append(HttpHeaders.UserAgent, USER_AGENT)
+                    append(HttpHeaders.UserAgent, sessionUserAgent)
                     append(HttpHeaders.Accept, "*/*")
                     append(HttpHeaders.AcceptLanguage, "de-DE,de;q=0.9,en-US;q=0.8,en;q=0.7")
                     append(HttpHeaders.ContentType, "application/x-www-form-urlencoded")
@@ -636,7 +653,7 @@ class InstagramService(
             throttledRequest("Logout", "Instagram-Logout") {
                 client.post("$BASE_URL/accounts/logout/ajax/") {
                 headers {
-                    append(HttpHeaders.UserAgent, USER_AGENT)
+                    append(HttpHeaders.UserAgent, sessionUserAgent)
                     append("X-CSRFToken", csrfToken)
                     append("X-IG-App-ID", IG_APP_ID)
                     append("X-Requested-With", "XMLHttpRequest")
@@ -664,13 +681,13 @@ class InstagramService(
      */
     private fun HttpRequestBuilder.addAuthHeaders(referer: String = "$BASE_URL/") {
         headers {
-            append(HttpHeaders.UserAgent, USER_AGENT)
+            append(HttpHeaders.UserAgent, sessionUserAgent)
             append(HttpHeaders.Accept, "*/*")
             append(HttpHeaders.AcceptLanguage, "de-DE,de;q=0.9,en-US;q=0.8,en;q=0.7")
             append("X-CSRFToken", csrfToken)
             append("X-IG-App-ID", IG_APP_ID)
             append("X-ASBD-ID", "129477")
-            append("X-IG-WWW-Claim", "hmac.AR3W0DThY2Mu6Fl51JGrmuxBPmcavRHhGp1VhDSLynajYhY7")
+            append("X-IG-WWW-Claim", wwwClaim)
             append("X-Requested-With", "XMLHttpRequest")
             append(HttpHeaders.Referrer, referer)
             append("Sec-Fetch-Dest", "empty")
@@ -684,7 +701,7 @@ class InstagramService(
      */
     private fun HttpRequestBuilder.addAnonHeaders(referer: String = "$BASE_URL/") {
         headers {
-            append(HttpHeaders.UserAgent, USER_AGENT)
+            append(HttpHeaders.UserAgent, sessionUserAgent)
             append(HttpHeaders.Accept, "*/*")
             append(HttpHeaders.AcceptLanguage, "de-DE,de;q=0.9,en-US;q=0.8,en;q=0.7")
             append("X-IG-App-ID", IG_APP_ID)
@@ -931,13 +948,13 @@ class InstagramService(
             var maxId: String? = null
             var hasMore = true
             var pageCount = 0
-            val maxPages = 40 // Higher limit for larger profiles while keeping a hard safety cap
+            val maxPages = 15 // Conservative limit to avoid triggering automated behavior detection
 
             while (hasMore && pageCount < maxPages) {
                 pageCount++
                 val response = throttledRequest("Posts laden", "Feed-Seite $pageCount") {
                     client.get("$BASE_URL/api/v1/feed/user/$effectiveUserId/") {
-                    parameter("count", "50")
+                    parameter("count", "33")
                     if (maxId != null) parameter("max_id", maxId)
                     if (isLoggedIn) addAuthHeaders("$BASE_URL/$username/")
                     else addAnonHeaders("$BASE_URL/$username/")
@@ -971,7 +988,7 @@ class InstagramService(
                 if (newMaxId == maxId) break // Prevent infinite loop with same max_id
                 maxId = newMaxId
 
-                if (allPosts.size >= 1200) break
+                if (allPosts.size >= 500) break
             }
 
             DownloadResult.Success(allPosts)
@@ -1096,10 +1113,11 @@ class InstagramService(
             val allPosts = mutableListOf<FeedPost>()
             var maxId: String? = null
             var hasMore = true
+            var pageCount = 0
 
-            // Paginate through archived posts
-            while (hasMore) {
-                val response = throttledRequest("Archiv laden", "Archiv-Seite") {
+            while (hasMore && pageCount < 15) {
+                pageCount++
+                val response = throttledRequest("Archiv laden", "Archiv-Seite $pageCount") {
                     client.get("$BASE_URL/api/v1/feed/only_me_feed/") {
                     if (maxId != null) {
                         parameter("max_id", maxId)
@@ -1129,13 +1147,13 @@ class InstagramService(
                     allPosts.add(parseV1MediaItem(item))
                 }
 
-                // Check for more pages
                 hasMore = jsonResponse.booleanAt("more_available")
                     ?: jsonResponse.stringAt("more_available")?.toBooleanStrictOrNull()
                     ?: false
-                maxId = jsonResponse.stringAt("next_max_id")
+                val newMaxId = jsonResponse.stringAt("next_max_id")
+                if (newMaxId == maxId || newMaxId == null) break
+                maxId = newMaxId
 
-                // Safety limit to avoid infinite loop
                 if (allPosts.size >= 500) break
             }
 
@@ -1157,9 +1175,11 @@ class InstagramService(
             val allPosts = mutableListOf<FeedPost>()
             var maxId: String? = null
             var hasMore = true
+            var pageCount = 0
 
-            while (hasMore) {
-                val response = throttledRequest("Reels laden", "Reels-Seite") {
+            while (hasMore && pageCount < 10) {
+                pageCount++
+                val response = throttledRequest("Reels laden", "Reels-Seite $pageCount") {
                     client.post("$BASE_URL/api/v1/clips/user/") {
                     addAuthHeaders()
                     headers {
@@ -1202,7 +1222,9 @@ class InstagramService(
                 hasMore = jsonResponse.objectAt("paging_info")?.booleanAt("more_available")
                     ?: jsonResponse.objectAt("paging_info")?.stringAt("more_available")?.toBooleanStrictOrNull()
                     ?: false
-                maxId = jsonResponse.objectAt("paging_info")?.stringAt("max_id")
+                val newMaxId = jsonResponse.objectAt("paging_info")?.stringAt("max_id")
+                if (newMaxId == maxId || newMaxId == null) break
+                maxId = newMaxId
 
                 if (allPosts.size >= 200) break
             }
@@ -1225,9 +1247,11 @@ class InstagramService(
             val allPosts = mutableListOf<FeedPost>()
             var maxId: String? = null
             var hasMore = true
+            var pageCount = 0
 
-            while (hasMore) {
-                val response = throttledRequest("Gespeicherte Posts laden", "Gespeicherte Posts") {
+            while (hasMore && pageCount < 15) {
+                pageCount++
+                val response = throttledRequest("Gespeicherte Posts laden", "Gespeicherte Posts $pageCount") {
                     client.get("$BASE_URL/api/v1/feed/saved/posts/") {
                     if (maxId != null) parameter("max_id", maxId)
                     addAuthHeaders()
@@ -1259,7 +1283,9 @@ class InstagramService(
                 hasMore = jsonResponse.booleanAt("more_available")
                     ?: jsonResponse.stringAt("more_available")?.toBooleanStrictOrNull()
                     ?: false
-                maxId = jsonResponse.stringAt("next_max_id")
+                val newMaxId = jsonResponse.stringAt("next_max_id")
+                if (newMaxId == maxId || newMaxId == null) break
+                maxId = newMaxId
 
                 if (allPosts.size >= 500) break
             }
@@ -1282,9 +1308,11 @@ class InstagramService(
             val allPosts = mutableListOf<FeedPost>()
             var maxId: String? = null
             var hasMore = true
+            var pageCount = 0
 
-            while (hasMore) {
-                val response = throttledRequest("Markierte Posts laden", "Markierte Posts") {
+            while (hasMore && pageCount < 15) {
+                pageCount++
+                val response = throttledRequest("Markierte Posts laden", "Markierte Posts $pageCount") {
                     client.get("$BASE_URL/api/v1/usertags/$userId/feed/") {
                     if (maxId != null) parameter("max_id", maxId)
                     addAuthHeaders()
@@ -1315,7 +1343,9 @@ class InstagramService(
                 hasMore = jsonResponse.booleanAt("more_available")
                     ?: jsonResponse.stringAt("more_available")?.toBooleanStrictOrNull()
                     ?: false
-                maxId = jsonResponse.stringAt("next_max_id")
+                val newMaxId = jsonResponse.stringAt("next_max_id")
+                if (newMaxId == maxId || newMaxId == null) break
+                maxId = newMaxId
 
                 if (allPosts.size >= 500) break
             }
@@ -1460,7 +1490,7 @@ class InstagramService(
             val response = throttledRequest("Datei herunterladen", "Mediendownload") {
                 client.get(url) {
                 headers {
-                    append(HttpHeaders.UserAgent, USER_AGENT)
+                    append(HttpHeaders.UserAgent, sessionUserAgent)
                     append(HttpHeaders.Accept, "image/webp,image/apng,image/*,video/*,*/*;q=0.8")
                     append(HttpHeaders.AcceptLanguage, "de-DE,de;q=0.9,en-US;q=0.8,en;q=0.7")
                     append(HttpHeaders.Referrer, "$BASE_URL/")

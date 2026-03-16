@@ -15,6 +15,14 @@
 -keepclasseswithmembers class com.xenlon.instadownloader.model.** {
     kotlinx.serialization.KSerializer serializer(...);
 }
+# Keep serializable classes in service package (StoredCookie, QueuePayload, etc.)
+-keep,includedescriptorclasses class com.xenlon.instadownloader.service.**$$serializer { *; }
+-keepclassmembers class com.xenlon.instadownloader.service.** {
+    *** Companion;
+}
+-keepclasseswithmembers class com.xenlon.instadownloader.service.** {
+    kotlinx.serialization.KSerializer serializer(...);
+}
 -keep class kotlinx.serialization.** { *; }
 -dontwarn kotlinx.serialization.**
 

@@ -291,23 +291,24 @@ class AppViewModel(private val appContext: Context) {
                             userId == instagramService.getSessionUserId())
                     _isOwnProfile.value = isOwn
 
-                    _feedPosts.value = instagramService.fetchFeedPosts(username, userId)
+                    // Only fetch feed posts automatically (essential data)
+                    // Stories + Highlights load with small delay to avoid burst
+                    launch {
+                        _feedPosts.value = instagramService.fetchFeedPosts(username, userId)
+                    }
 
                     if (userId.isNotEmpty() && !_isAnonymousMode.value) {
-                        _stories.value = instagramService.fetchStories(userId)
-                        _highlights.value = instagramService.fetchHighlights(userId)
-                        _reels.value = DownloadResult.Loading
-                        _reels.value = instagramService.fetchReels(userId)
-                        _taggedPosts.value = DownloadResult.Loading
-                        _taggedPosts.value = instagramService.fetchTaggedPosts(userId)
-
-                        // Own-profile-only data
-                        if (isOwn) {
-                            _archivedPosts.value = DownloadResult.Loading
-                            _archivedPosts.value = instagramService.fetchArchivedPosts()
-                            _savedPosts.value = DownloadResult.Loading
-                            _savedPosts.value = instagramService.fetchSavedPosts()
+                        // Stagger stories and highlights with delay to reduce burst
+                        launch {
+                            kotlinx.coroutines.delay(1500)
+                            _stories.value = instagramService.fetchStories(userId)
                         }
+                        launch {
+                            kotlinx.coroutines.delay(3000)
+                            _highlights.value = instagramService.fetchHighlights(userId)
+                        }
+                        // Reels, tagged, archive, saved are loaded on-demand only
+                        // to avoid triggering Instagram's automated behavior detection
                     }
                 }
                 is DownloadResult.Error -> {
@@ -322,6 +323,44 @@ class AppViewModel(private val appContext: Context) {
                     _isSearchLoading.value = false
                 }
             }
+        }
+    }
+
+    /** Lazy-load reels when user scrolls to that section */
+    fun loadReels() {
+        val profile = _currentProfile.value ?: return
+        if (_reels.value != null) return
+        scope.launch {
+            _reels.value = DownloadResult.Loading
+            _reels.value = instagramService.fetchReels(profile.userId)
+        }
+    }
+
+    /** Lazy-load tagged posts when user scrolls to that section */
+    fun loadTaggedPosts() {
+        val profile = _currentProfile.value ?: return
+        if (_taggedPosts.value != null) return
+        scope.launch {
+            _taggedPosts.value = DownloadResult.Loading
+            _taggedPosts.value = instagramService.fetchTaggedPosts(profile.userId)
+        }
+    }
+
+    /** Lazy-load archived posts (own profile only) */
+    fun loadArchivedPosts() {
+        if (_archivedPosts.value != null) return
+        scope.launch {
+            _archivedPosts.value = DownloadResult.Loading
+            _archivedPosts.value = instagramService.fetchArchivedPosts()
+        }
+    }
+
+    /** Lazy-load saved posts (own profile only) */
+    fun loadSavedPosts() {
+        if (_savedPosts.value != null) return
+        scope.launch {
+            _savedPosts.value = DownloadResult.Loading
+            _savedPosts.value = instagramService.fetchSavedPosts()
         }
     }
 

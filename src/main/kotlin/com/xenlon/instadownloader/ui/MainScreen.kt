@@ -117,6 +117,10 @@ fun MainScreen(
     onRetryFailedQueueItems: () -> Unit = {},
     onCancelActiveQueueItems: () -> Unit = {},
     onClearFinishedQueueItems: () -> Unit = {},
+    onLoadReels: () -> Unit = {},
+    onLoadTaggedPosts: () -> Unit = {},
+    onLoadArchivedPosts: () -> Unit = {},
+    onLoadSavedPosts: () -> Unit = {},
     onHandleClipboardUrl: () -> Unit = {},
     onDismissClipboardUrl: () -> Unit = {},
     onLogout: () -> Unit,
@@ -450,7 +454,16 @@ fun MainScreen(
                 ProfileSectionsTabBar(
                     tabs = contentTabs,
                     selectedTab = selectedSectionTab,
-                    onSelect = { selectedSectionTab = it }
+                    onSelect = { tab ->
+                        selectedSectionTab = tab
+                        // Lazy-load on-demand sections when user selects them
+                        when (tab) {
+                            "reels" -> onLoadReels()
+                            "tagged" -> onLoadTaggedPosts()
+                            "archive" -> onLoadArchivedPosts()
+                            "saved" -> onLoadSavedPosts()
+                        }
+                    }
                 )
 
                 ContentSortBar(
