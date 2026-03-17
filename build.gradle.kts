@@ -65,7 +65,7 @@ dependencies {
     // AndroidX Core
     implementation("androidx.core:core-ktx:1.12.0")
     implementation("androidx.activity:activity-compose:1.8.2")
-    implementation("androidx.fragment:fragment-ktx:1.6.2")
+
 
     // Compose BOM (manages all Compose library versions)
     implementation(platform("androidx.compose:compose-bom:2024.02.00"))
@@ -106,8 +106,6 @@ dependencies {
     implementation("androidx.work:work-runtime-ktx:2.9.0")
 
     // Firebase Crashlytics
-    // Firebase Crashlytics - disabled until google-services plugin is available
-    // implementation("com.google.firebase:firebase-crashlytics")
 
     // Coroutines
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.7.3")
