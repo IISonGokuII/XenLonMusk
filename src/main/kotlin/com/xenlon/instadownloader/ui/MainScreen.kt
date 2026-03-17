@@ -91,6 +91,7 @@ fun MainScreen(
     searchHistory: List<SearchHistoryEntry> = emptyList(),
     downloadQuality: DownloadQuality = DownloadQuality.HD,
     downloadOnlyNew: Boolean = true,
+    profileRequestCooldownMillis: Long = 15_000L,
     clipboardUrl: String? = null,
     requestHealth: RequestHealthState = RequestHealthState(),
     isSearchLoading: Boolean = false,
@@ -111,6 +112,7 @@ fun MainScreen(
     onRemoveFromHistory: (SearchHistoryEntry) -> Unit,
     onToggleQuality: () -> Unit = {},
     onToggleDownloadOnlyNew: () -> Unit = {},
+    onCycleProfileRequestCooldown: () -> Unit = {},
     onDownloadPreviewItem: (category: String, sourceId: String) -> Unit = { _, _ -> },
     onRetryQueueItem: (DownloadQueueItem) -> Unit = {},
     onCancelQueueItem: (DownloadQueueItem) -> Unit = {},
@@ -360,6 +362,59 @@ fun MainScreen(
                         checked = downloadOnlyNew,
                         onCheckedChange = { onToggleDownloadOnlyNew() }
                     )
+                }
+            }
+
+            Card(
+                shape = RoundedCornerShape(14.dp),
+                colors = CardDefaults.cardColors(containerColor = DarkSurface)
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { onCycleProfileRequestCooldown() }
+                        .padding(horizontal = 16.dp, vertical = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(
+                            Icons.Default.Timer,
+                            contentDescription = null,
+                            tint = AccentPurple,
+                            modifier = Modifier.size(20.dp)
+                        )
+                        Spacer(modifier = Modifier.width(10.dp))
+                        Column {
+                            Text(
+                                "Cooldown nach Profil-Load",
+                                color = TextPrimary,
+                                fontSize = 14.sp,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                            Text(
+                                "Greift erst nach vollstaendigem Laden des Profils.",
+                                color = TextSecondary,
+                                fontSize = 12.sp,
+                                lineHeight = 16.sp
+                            )
+                        }
+                    }
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            "${profileRequestCooldownMillis / 1000L}s",
+                            color = AccentPurple,
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Icon(
+                            Icons.Default.SwapHoriz,
+                            contentDescription = null,
+                            tint = TextSecondary,
+                            modifier = Modifier.size(18.dp)
+                        )
+                    }
                 }
             }
 

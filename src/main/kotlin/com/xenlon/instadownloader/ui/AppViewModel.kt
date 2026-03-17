@@ -51,6 +51,7 @@ class AppViewModel(private val appContext: Context) {
     private val prefs: SharedPreferences =
         appContext.getSharedPreferences("insta_downloader", Context.MODE_PRIVATE)
     private val fileNameTimestampFormat = SimpleDateFormat("yyyy-MM-dd_HH-mm-ss", Locale.getDefault())
+    private val profileCooldownOptionsMillis = listOf(15_000L, 30_000L, 60_000L, 120_000L, 180_000L)
 
     // Screen state
     enum class Screen { LOGIN, MAIN, GALLERY, QUEUE, STATS, BROWSER }
@@ -144,6 +145,8 @@ class AppViewModel(private val appContext: Context) {
 
     private val _downloadOnlyNew = MutableStateFlow(true)
     val downloadOnlyNew: StateFlow<Boolean> = _downloadOnlyNew.asStateFlow()
+    private val _profileRequestCooldownMillis = MutableStateFlow(InstagramService.DEFAULT_POST_PROFILE_COOLDOWN_MILLIS)
+    val profileRequestCooldownMillis: StateFlow<Long> = _profileRequestCooldownMillis.asStateFlow()
 
     // Search loading state
     private val _isSearchLoading = MutableStateFlow(false)
@@ -161,6 +164,7 @@ class AppViewModel(private val appContext: Context) {
         loadSearchHistory()
         loadQualityPreference()
         loadDownloadPreferences()
+        loadRequestCooldownPreference()
         startClipboardMonitoring()
         // Wait for session restoration before checking auth state
         scope.launch {
@@ -553,6 +557,19 @@ class AppViewModel(private val appContext: Context) {
         prefs.edit().putBoolean("download_only_new", newValue).apply()
     }
 
+    fun cycleProfileRequestCooldown() {
+        val current = _profileRequestCooldownMillis.value
+        val index = profileCooldownOptionsMillis.indexOf(current)
+        val next = if (index == -1 || index == profileCooldownOptionsMillis.lastIndex) {
+            profileCooldownOptionsMillis.first()
+        } else {
+            profileCooldownOptionsMillis[index + 1]
+        }
+        val applied = instagramService.setPostProfileCooldownMillis(next)
+        _profileRequestCooldownMillis.value = applied
+        prefs.edit().putLong("profile_request_cooldown_millis", applied).apply()
+    }
+
     private fun loadQualityPreference() {
         val saved = prefs.getString("download_quality", "HD") ?: "HD"
         val quality = try { DownloadQuality.valueOf(saved) } catch (_: Exception) { DownloadQuality.HD }
@@ -564,6 +581,15 @@ class AppViewModel(private val appContext: Context) {
         val onlyNew = prefs.getBoolean("download_only_new", true)
         _downloadOnlyNew.value = onlyNew
         downloadManager.onlyNewDownloads = onlyNew
+    }
+
+    private fun loadRequestCooldownPreference() {
+        val saved = prefs.getLong(
+            "profile_request_cooldown_millis",
+            InstagramService.DEFAULT_POST_PROFILE_COOLDOWN_MILLIS
+        )
+        val applied = instagramService.setPostProfileCooldownMillis(saved)
+        _profileRequestCooldownMillis.value = applied
     }
 
     // --- Clipboard Monitoring ---

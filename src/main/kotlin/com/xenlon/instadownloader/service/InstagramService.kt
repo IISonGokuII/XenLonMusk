@@ -62,7 +62,8 @@ class InstagramService(
     private val minRequestSpacingMillis = 2500L
     private val softBurstWindowMillis = 60_000L
     private val softBurstLimit = 10
-    private val postProfileCooldownMillis = 15_000L
+    @Volatile
+    private var postProfileCooldownMillis = DEFAULT_POST_PROFILE_COOLDOWN_MILLIS
     private var nextAllowedRequestAtMillis = 0L
     private var profileLoadInProgress = false
     private val _requestHealth = MutableStateFlow(RequestHealthState())
@@ -132,6 +133,15 @@ class InstagramService(
                 )
             }
         }
+    }
+
+    fun setPostProfileCooldownMillis(cooldownMillis: Long): Long {
+        val clamped = cooldownMillis.coerceIn(
+            MIN_POST_PROFILE_COOLDOWN_MILLIS,
+            MAX_POST_PROFILE_COOLDOWN_MILLIS
+        )
+        postProfileCooldownMillis = clamped
+        return clamped
     }
 
     private fun JsonElement?.asObjectOrNull(): JsonObject? = this as? JsonObject
@@ -256,6 +266,9 @@ class InstagramService(
         private const val IG_APP_ID = "936619743392459"
         private const val SESSION_COOKIES_KEY = "session_cookies"
         private const val SESSION_USERNAME_KEY = "session_username"
+        const val MIN_POST_PROFILE_COOLDOWN_MILLIS = 15_000L
+        const val MAX_POST_PROFILE_COOLDOWN_MILLIS = 180_000L
+        const val DEFAULT_POST_PROFILE_COOLDOWN_MILLIS = 15_000L
 
         /**
          * Lightweight CDN download - no session, no throttling, no cookie storage needed.
