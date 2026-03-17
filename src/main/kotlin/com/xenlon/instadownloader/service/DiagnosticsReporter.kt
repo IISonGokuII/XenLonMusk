@@ -10,6 +10,8 @@ import java.util.Locale
 
 object DiagnosticsReporter {
     private const val TAG = "InstaDownloader"
+    private const val LOG_FILE_NAME = "instadown.log"
+    private const val LOG_ARCHIVE_FILE_NAME = "instadown.old.log"
     @Volatile
     private var appContext: Context? = null
     private val timestampFormat = SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS", Locale.US)
@@ -111,17 +113,34 @@ object DiagnosticsReporter {
     private fun appendLocalLog(message: String) {
         val context = appContext ?: return
         runCatching {
-            val logDir = File(context.filesDir, "diagnostics")
-            logDir.mkdirs()
-            val logFile = File(logDir, "instadown.log")
-            // Rotate log if > 500KB
-            if (logFile.exists() && logFile.length() > 512_000) {
-                val oldLog = File(logDir, "instadown.old.log")
-                oldLog.delete()
-                logFile.renameTo(oldLog)
-            }
             val timestamp = timestampFormat.format(Date())
-            logFile.appendText("[$timestamp] $message\n")
+            val line = "[$timestamp] $message\n"
+
+            // Internal app log (always available)
+            val internalLogDir = File(context.filesDir, "diagnostics")
+            internalLogDir.mkdirs()
+            val internalLogFile = File(internalLogDir, LOG_FILE_NAME)
+            rotateIfNeeded(internalLogDir, internalLogFile)
+            internalLogFile.appendText(line)
+
+            // Mirror into app download folder on the device:
+            // /Android/data/com.instadown.app/files/InstaDownloader/instadown.log
+            val publicAppDir = context.getExternalFilesDir(null)?.let {
+                File(it, "InstaDownloader")
+            }
+            if (publicAppDir != null) {
+                publicAppDir.mkdirs()
+                val downloadLogFile = File(publicAppDir, LOG_FILE_NAME)
+                rotateIfNeeded(publicAppDir, downloadLogFile)
+                downloadLogFile.appendText(line)
+            }
         }
+    }
+
+    private fun rotateIfNeeded(logDir: File, logFile: File) {
+        if (!logFile.exists() || logFile.length() <= 512_000) return
+        val oldLog = File(logDir, LOG_ARCHIVE_FILE_NAME)
+        oldLog.delete()
+        logFile.renameTo(oldLog)
     }
 }
