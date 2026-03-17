@@ -153,8 +153,19 @@ class AppViewModel(private val appContext: Context) {
         loadQualityPreference()
         loadDownloadPreferences()
         startClipboardMonitoring()
-        if (instagramService.isAuthenticated()) {
-            _currentScreen.value = Screen.MAIN
+        // Wait for session restoration before checking auth state
+        scope.launch {
+            instagramService.awaitSessionReady()
+            if (instagramService.isAuthenticated()) {
+                _currentScreen.value = Screen.MAIN
+                // Refresh CSRF token and cookies in background
+                instagramService.refreshSession()
+                // Check again after refresh - session may have been invalidated
+                if (!instagramService.isAuthenticated()) {
+                    _currentScreen.value = Screen.LOGIN
+                    _loginError.value = "Sitzung abgelaufen. Bitte erneut einloggen."
+                }
+            }
         }
         observeDownloadQueue()
     }
@@ -606,6 +617,7 @@ class AppViewModel(private val appContext: Context) {
 
     fun loadGalleryItems() {
         scope.launch(Dispatchers.IO) {
+            try {
             val dir = File(downloadManager.getDownloadDir())
             if (!dir.exists()) {
                 _galleryItems.value = emptyList()
@@ -651,6 +663,10 @@ class AppViewModel(private val appContext: Context) {
 
             _galleryItems.value = items
             DiagnosticsReporter.logGalleryScan(dir.absolutePath, items.size)
+            } catch (e: Exception) {
+                DiagnosticsReporter.logGalleryScan("ERROR: ${e.message}", 0)
+                _galleryItems.value = emptyList()
+            }
         }
     }
 
@@ -711,10 +727,11 @@ class AppViewModel(private val appContext: Context) {
 
     fun deleteGalleryItem(item: GalleryItem) {
         scope.launch(Dispatchers.IO) {
-            if (item.file.exists()) {
-                item.file.delete()
-            }
-            metadataFileFor(item.file).delete()
+            try {
+                if (item.file.exists()) item.file.delete()
+                val meta = metadataFileFor(item.file)
+                if (meta.exists()) meta.delete()
+            } catch (_: Exception) {}
             _galleryItems.value = _galleryItems.value.filter { it.file.absolutePath != item.file.absolutePath }
         }
     }

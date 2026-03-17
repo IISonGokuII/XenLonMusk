@@ -78,12 +78,28 @@ class InstagramService(
         val expiresTimestamp: Long? = null,
     )
 
+    private val sessionReady = kotlinx.coroutines.CompletableDeferred<Unit>()
+
     init {
         if (sessionPrefs != null) {
             kotlinx.coroutines.CoroutineScope(Dispatchers.IO).launch {
-                restorePersistedSession()
+                try {
+                    restorePersistedSession()
+                } finally {
+                    sessionReady.complete(Unit)
+                }
             }
+        } else {
+            sessionReady.complete(Unit)
         }
+    }
+
+    /**
+     * Suspends until session restoration is complete.
+     * Call this before checking isAuthenticated() to avoid race conditions.
+     */
+    suspend fun awaitSessionReady() {
+        sessionReady.await()
     }
 
     private fun JsonElement?.asObjectOrNull(): JsonObject? = this as? JsonObject
@@ -259,7 +275,26 @@ class InstagramService(
 
         if (cookies.isEmpty()) return
 
-        cookies.forEach { stored ->
+        val now = System.currentTimeMillis()
+        val validCookies = cookies.filter { stored ->
+            // Skip cookies that have expired
+            stored.expiresTimestamp == null || stored.expiresTimestamp > now
+        }
+
+        if (validCookies.isEmpty()) {
+            // All cookies expired - clear stored session
+            clearPersistedSession()
+            return
+        }
+
+        // Check specifically that sessionid hasn't expired
+        val sessionCookie = validCookies.find { it.name == "sessionid" }
+        if (sessionCookie == null || sessionCookie.value.isBlank()) {
+            clearPersistedSession()
+            return
+        }
+
+        validCookies.forEach { stored ->
             cookieStorage.addCookie(
                 Url(BASE_URL),
                 Cookie(
@@ -308,6 +343,43 @@ class InstagramService(
             ?.remove(SESSION_COOKIES_KEY)
             ?.remove(SESSION_USERNAME_KEY)
             ?.apply()
+    }
+
+    /**
+     * Refreshes the CSRF token by hitting Instagram's homepage.
+     * Also updates cookies that may have been rotated server-side.
+     * Call this periodically or before important operations.
+     */
+    suspend fun refreshSession(): Boolean = withContext(Dispatchers.IO) {
+        if (!isLoggedIn) return@withContext false
+        try {
+            val response = throttledRequest("Session auffrischen", "Session-Refresh") {
+                client.get(BASE_URL) {
+                    headers {
+                        append(HttpHeaders.UserAgent, sessionUserAgent)
+                        append(HttpHeaders.Accept, "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
+                        append(HttpHeaders.AcceptLanguage, "de-DE,de;q=0.9,en-US;q=0.8,en;q=0.7")
+                    }
+                }
+            }
+            if (response.status == HttpStatusCode.OK) {
+                val cookies = cookieStorage.get(Url(BASE_URL))
+                val newCsrf = cookies.find { it.name == "csrftoken" }?.value
+                if (!newCsrf.isNullOrBlank()) {
+                    csrfToken = newCsrf
+                }
+                // Re-persist updated cookies
+                val username = sessionPrefs?.getString(SESSION_USERNAME_KEY, null)
+                if (!username.isNullOrBlank()) {
+                    persistSession(username)
+                }
+                true
+            } else {
+                false
+            }
+        } catch (_: Exception) {
+            false
+        }
     }
 
     private suspend fun awaitRequestSlot(reason: String) {
@@ -388,9 +460,17 @@ class InstagramService(
                 requestMutex.withLock {
                     nextAllowedRequestAtMillis = maxOf(nextAllowedRequestAtMillis, now + 30_000L)
                 }
+                // Session is likely invalid - mark as logged out so UI can re-prompt
+                if (isLoggedIn) {
+                    isLoggedIn = false
+                    sessionUserId = ""
+                    csrfToken = ""
+                    // Don't clear persisted session yet - user may want to re-login
+                    // with saved credentials rather than re-entering them
+                }
                 _requestHealth.value = RequestHealthState(
                     level = RequestHealthLevel.WARNING,
-                    message = "$responseLabel wurde von Instagram eingeschränkt. Bitte langsamer weiterarbeiten.",
+                    message = "Sitzung abgelaufen oder eingeschränkt. Bitte erneut einloggen.",
                     recentRequestCount = requestTimestamps.size,
                     cooldownUntilMillis = now + 30_000L,
                     lastUpdatedMillis = now

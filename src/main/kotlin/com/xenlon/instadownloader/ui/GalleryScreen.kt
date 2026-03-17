@@ -1,5 +1,7 @@
 package com.xenlon.instadownloader.ui
 
+import android.graphics.Bitmap
+import android.media.MediaMetadataRetriever
 import android.net.Uri
 import androidx.compose.animation.*
 import androidx.compose.foundation.*
@@ -26,6 +28,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
@@ -36,12 +39,18 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.media3.common.AudioAttributes
+import androidx.media3.common.C
 import androidx.media3.common.MediaItem
+import androidx.media3.common.PlaybackException
+import androidx.media3.common.Player
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.ui.PlayerView
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
 import com.xenlon.instadownloader.model.GalleryItem
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 /**
  * User folder for the gallery overview.
@@ -56,6 +65,38 @@ private enum class MediaFilter(val label: String) {
     ALL("Alle"),
     IMAGES("Bilder"),
     VIDEOS("Videos")
+}
+
+private enum class GridSize(val columns: Int, val icon: @Composable () -> Unit) {
+    SMALL(4, { Icon(Icons.Default.GridOn, contentDescription = null, modifier = Modifier.size(18.dp)) }),
+    MEDIUM(3, { Icon(Icons.Default.GridView, contentDescription = null, modifier = Modifier.size(18.dp)) }),
+    LARGE(2, { Icon(Icons.Default.ViewModule, contentDescription = null, modifier = Modifier.size(18.dp)) });
+
+    fun next(): GridSize = entries[(ordinal + 1) % entries.size]
+}
+
+/**
+ * Extracts a video thumbnail bitmap. Returns null on failure.
+ */
+@Composable
+private fun rememberVideoThumbnail(file: java.io.File): Bitmap? {
+    var thumbnail by remember(file.absolutePath) { mutableStateOf<Bitmap?>(null) }
+
+    LaunchedEffect(file.absolutePath) {
+        thumbnail = withContext(Dispatchers.IO) {
+            try {
+                val retriever = MediaMetadataRetriever()
+                retriever.setDataSource(file.absolutePath)
+                val frame = retriever.getFrameAtTime(0, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
+                retriever.release()
+                frame
+            } catch (_: Exception) {
+                null
+            }
+        }
+    }
+
+    return thumbnail
 }
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
@@ -475,6 +516,7 @@ private fun UserFolderScreen(
     var searchQuery by remember { mutableStateOf("") }
     var sortMode by remember { mutableStateOf(SortMode.DATE_NEWEST) }
     var showSortMenu by remember { mutableStateOf(false) }
+    var gridSize by remember { mutableStateOf(GridSize.MEDIUM) }
 
     val categories = remember(folder.items) {
         listOf("Alle") + folder.items.map { it.category }.distinct().sorted()
@@ -601,6 +643,10 @@ private fun UserFolderScreen(
                         }
                     }
                 }
+                // Grid size toggle
+                IconButton(onClick = { gridSize = gridSize.next() }) {
+                    gridSize.icon()
+                }
                 IconButton(onClick = onToggleMultiSelect) {
                     Icon(
                         if (isMultiSelectMode) Icons.Default.Close else Icons.Default.DoneAll,
@@ -699,7 +745,7 @@ private fun UserFolderScreen(
 
         // Gallery grid
         LazyVerticalGrid(
-            columns = GridCells.Fixed(3),
+            columns = GridCells.Fixed(gridSize.columns),
             modifier = Modifier
                 .fillMaxSize()
                 .padding(horizontal = 4.dp),
@@ -751,23 +797,50 @@ private fun GalleryThumbnail(
                 else Modifier
             )
     ) {
-        AsyncImage(
-            model = ImageRequest.Builder(context)
-                .data(item.file)
-                .crossfade(true)
-                .build(),
-            contentDescription = item.name,
-            modifier = Modifier.fillMaxSize(),
-            contentScale = ContentScale.Crop
-        )
+        if (item.isVideo) {
+            // Extract and show video thumbnail
+            val thumbnail = rememberVideoThumbnail(item.file)
+            if (thumbnail != null) {
+                Image(
+                    bitmap = thumbnail.asImageBitmap(),
+                    contentDescription = item.name,
+                    modifier = Modifier.fillMaxSize(),
+                    contentScale = ContentScale.Crop
+                )
+            } else {
+                // Fallback while loading
+                Box(
+                    modifier = Modifier.fillMaxSize().background(DarkSurfaceVariant),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        Icons.Default.Videocam,
+                        contentDescription = null,
+                        tint = TextSecondary,
+                        modifier = Modifier.size(32.dp)
+                    )
+                }
+            }
+        } else {
+            AsyncImage(
+                model = ImageRequest.Builder(context)
+                    .data(item.file)
+                    .crossfade(true)
+                    .size(512)
+                    .build(),
+                contentDescription = item.name,
+                modifier = Modifier.fillMaxSize(),
+                contentScale = ContentScale.Crop
+            )
+        }
 
-        // Video indicator
+        // Video indicator overlay
         if (item.isVideo) {
             Box(
                 modifier = Modifier
                     .align(Alignment.TopEnd)
                     .padding(6.dp)
-                    .size(24.dp)
+                    .size(28.dp)
                     .clip(CircleShape)
                     .background(Color.Black.copy(alpha = 0.6f)),
                 contentAlignment = Alignment.Center
@@ -776,7 +849,7 @@ private fun GalleryThumbnail(
                     Icons.Default.PlayArrow,
                     contentDescription = null,
                     tint = Color.White,
-                    modifier = Modifier.size(16.dp)
+                    modifier = Modifier.size(18.dp)
                 )
             }
         }
@@ -887,13 +960,15 @@ private fun GalleryPagerViewer(
                 .fillMaxWidth()
         ) { page ->
             val item = items[page]
+            val isCurrentPage = pagerState.currentPage == page
             Box(
                 modifier = Modifier.fillMaxSize(),
                 contentAlignment = Alignment.Center
             ) {
                 if (item.isVideo) {
-                    VideoPlayer(
+                    PagerVideoPlayer(
                         file = item.file,
+                        isActive = isCurrentPage,
                         modifier = Modifier.fillMaxSize()
                     )
                 } else {
@@ -1037,13 +1112,29 @@ private fun VideoPlayer(
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
+    var hasError by remember { mutableStateOf(false) }
+    var errorMessage by remember { mutableStateOf("") }
 
     val exoPlayer = remember {
-        ExoPlayer.Builder(context).build().apply {
-            setMediaItem(MediaItem.fromUri(Uri.fromFile(file)))
-            prepare()
-            playWhenReady = true
-        }
+        ExoPlayer.Builder(context)
+            .setAudioAttributes(
+                AudioAttributes.Builder()
+                    .setUsage(C.USAGE_MEDIA)
+                    .setContentType(C.AUDIO_CONTENT_TYPE_MOVIE)
+                    .build(),
+                true // handleAudioFocus
+            )
+            .build().apply {
+                setMediaItem(MediaItem.fromUri(Uri.fromFile(file)))
+                addListener(object : Player.Listener {
+                    override fun onPlayerError(error: PlaybackException) {
+                        hasError = true
+                        errorMessage = error.localizedMessage ?: "Wiedergabefehler"
+                    }
+                })
+                prepare()
+                playWhenReady = true
+            }
     }
 
     DisposableEffect(Unit) {
@@ -1052,16 +1143,119 @@ private fun VideoPlayer(
         }
     }
 
-    AndroidView(
-        factory = { ctx ->
-            PlayerView(ctx).apply {
-                player = exoPlayer
-                useController = true
-                setShowBuffering(PlayerView.SHOW_BUFFERING_WHEN_PLAYING)
+    if (hasError) {
+        Box(
+            modifier = modifier.background(DarkSurfaceVariant),
+            contentAlignment = Alignment.Center
+        ) {
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                Icon(
+                    Icons.Default.ErrorOutline,
+                    contentDescription = null,
+                    tint = ErrorRed,
+                    modifier = Modifier.size(48.dp)
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(
+                    "Video kann nicht abgespielt werden",
+                    color = TextPrimary,
+                    fontSize = 14.sp
+                )
+                Text(
+                    errorMessage,
+                    color = TextSecondary,
+                    fontSize = 12.sp
+                )
             }
-        },
-        modifier = modifier
-    )
+        }
+    } else {
+        AndroidView(
+            factory = { ctx ->
+                PlayerView(ctx).apply {
+                    player = exoPlayer
+                    useController = true
+                    setShowBuffering(PlayerView.SHOW_BUFFERING_ALWAYS)
+                }
+            },
+            modifier = modifier
+        )
+    }
+}
+
+/**
+ * Video player for the pager viewer that auto-plays when active and pauses when swiped away.
+ */
+@Composable
+private fun PagerVideoPlayer(
+    file: java.io.File,
+    isActive: Boolean,
+    modifier: Modifier = Modifier
+) {
+    val context = LocalContext.current
+    var hasError by remember { mutableStateOf(false) }
+    var errorMessage by remember { mutableStateOf("") }
+
+    val exoPlayer = remember {
+        ExoPlayer.Builder(context)
+            .setAudioAttributes(
+                AudioAttributes.Builder()
+                    .setUsage(C.USAGE_MEDIA)
+                    .setContentType(C.AUDIO_CONTENT_TYPE_MOVIE)
+                    .build(),
+                true
+            )
+            .build().apply {
+                setMediaItem(MediaItem.fromUri(Uri.fromFile(file)))
+                addListener(object : Player.Listener {
+                    override fun onPlayerError(error: PlaybackException) {
+                        hasError = true
+                        errorMessage = error.localizedMessage ?: "Wiedergabefehler"
+                    }
+                })
+                prepare()
+            }
+    }
+
+    // Auto-play/pause based on page visibility
+    LaunchedEffect(isActive) {
+        exoPlayer.playWhenReady = isActive
+    }
+
+    DisposableEffect(Unit) {
+        onDispose {
+            exoPlayer.release()
+        }
+    }
+
+    if (hasError) {
+        Box(
+            modifier = modifier.background(DarkSurfaceVariant),
+            contentAlignment = Alignment.Center
+        ) {
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                Icon(
+                    Icons.Default.ErrorOutline,
+                    contentDescription = null,
+                    tint = ErrorRed,
+                    modifier = Modifier.size(48.dp)
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                Text("Video kann nicht abgespielt werden", color = TextPrimary, fontSize = 14.sp)
+                Text(errorMessage, color = TextSecondary, fontSize = 12.sp)
+            }
+        }
+    } else {
+        AndroidView(
+            factory = { ctx ->
+                PlayerView(ctx).apply {
+                    player = exoPlayer
+                    useController = true
+                    setShowBuffering(PlayerView.SHOW_BUFFERING_ALWAYS)
+                }
+            },
+            modifier = modifier
+        )
+    }
 }
 
 @Composable
