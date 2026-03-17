@@ -21,6 +21,7 @@ class DownloadForegroundService : Service() {
 
         when (intent?.action) {
             ACTION_STOP -> {
+                foregroundStarted = false
                 stopForeground(STOP_FOREGROUND_REMOVE)
                 stopSelf()
             }
@@ -42,6 +43,7 @@ class DownloadForegroundService : Service() {
                     } else {
                         startForeground(NOTIFICATION_ID, notification)
                     }
+                    foregroundStarted = true
                 } else {
                     val manager = getSystemService(NotificationManager::class.java)
                     manager.notify(NOTIFICATION_ID, notification)
@@ -81,6 +83,8 @@ class DownloadForegroundService : Service() {
         private const val EXTRA_CURRENT = "current"
         private const val EXTRA_TOTAL = "total"
         private const val EXTRA_INDETERMINATE = "indeterminate"
+        @Volatile
+        private var foregroundStarted: Boolean = false
 
         fun createChannel(context: Context) {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -107,6 +111,12 @@ class DownloadForegroundService : Service() {
 
         fun startOrUpdate(context: Context, progress: DownloadProgress) {
             createChannel(context)
+
+            val isActiveDownload = progress is DownloadProgress.Downloading
+            if (!isActiveDownload && !foregroundStarted) {
+                return
+            }
+
             val params = when (progress) {
                 is DownloadProgress.Downloading -> NotificationParams(
                     "InstaDownloader", progress.label, progress.current, progress.total, false,
@@ -125,7 +135,7 @@ class DownloadForegroundService : Service() {
                 )
             }
 
-            val action = if (progress is DownloadProgress.Downloading) ACTION_START else ACTION_UPDATE
+            val action = if (isActiveDownload && !foregroundStarted) ACTION_START else ACTION_UPDATE
             val intent = Intent(context, DownloadForegroundService::class.java).apply {
                 this.action = action
                 putExtra(EXTRA_TITLE, params.title)
@@ -135,10 +145,19 @@ class DownloadForegroundService : Service() {
                 putExtra(EXTRA_INDETERMINATE, params.indeterminate)
             }
 
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                context.startForegroundService(intent)
-            } else {
-                context.startService(intent)
+            runCatching {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && action == ACTION_START) {
+                    context.startForegroundService(intent)
+                } else {
+                    context.startService(intent)
+                }
+            }.onFailure { throwable ->
+                DiagnosticsReporter.logWorkerFailure(
+                    label = "ForegroundServiceStart",
+                    outputPath = "",
+                    reason = throwable.message ?: "Service start failed",
+                    throwable = throwable,
+                )
             }
         }
 
@@ -146,7 +165,16 @@ class DownloadForegroundService : Service() {
             val intent = Intent(context, DownloadForegroundService::class.java).apply {
                 action = ACTION_STOP
             }
-            context.startService(intent)
+            runCatching {
+                context.startService(intent)
+            }.onFailure { throwable ->
+                DiagnosticsReporter.logWorkerFailure(
+                    label = "ForegroundServiceStop",
+                    outputPath = "",
+                    reason = throwable.message ?: "Service stop failed",
+                    throwable = throwable,
+                )
+            }
         }
     }
 }

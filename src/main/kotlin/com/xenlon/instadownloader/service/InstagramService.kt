@@ -258,7 +258,9 @@ class InstagramService(
 
                 val file = java.io.File(outputPath)
                 file.parentFile?.mkdirs()
-                val tempFile = java.io.File("${outputPath}.part")
+                val tempFile = java.io.File(
+                    "${outputPath}.${System.currentTimeMillis()}_${Thread.currentThread().id}.part"
+                )
                 if (tempFile.exists()) {
                     tempFile.delete()
                 }
