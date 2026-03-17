@@ -1,6 +1,11 @@
 package com.xenlon.instadownloader.service
 
 import android.content.Context
+import android.content.ContentValues
+import android.net.Uri
+import android.os.Build
+import android.os.Environment
+import android.provider.MediaStore
 import android.util.Log
 import com.google.firebase.crashlytics.FirebaseCrashlytics
 import java.io.File
@@ -12,6 +17,7 @@ object DiagnosticsReporter {
     private const val TAG = "InstaDownloader"
     private const val LOG_FILE_NAME = "instadown.log"
     private const val LOG_ARCHIVE_FILE_NAME = "instadown.old.log"
+    private const val PUBLIC_LOG_SUBDIR = "InstaDownloader"
     @Volatile
     private var appContext: Context? = null
     private val timestampFormat = SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS", Locale.US)
@@ -134,6 +140,9 @@ object DiagnosticsReporter {
                 rotateIfNeeded(publicAppDir, downloadLogFile)
                 downloadLogFile.appendText(line)
             }
+
+            // Write into regular Downloads folder so the user can access it easily.
+            appendToPublicDownloadsLog(context, line)
         }
     }
 
@@ -142,5 +151,56 @@ object DiagnosticsReporter {
         val oldLog = File(logDir, LOG_ARCHIVE_FILE_NAME)
         oldLog.delete()
         logFile.renameTo(oldLog)
+    }
+
+    private fun appendToPublicDownloadsLog(context: Context, line: String) {
+        runCatching {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                val resolver = context.contentResolver
+                val relativePath = "${Environment.DIRECTORY_DOWNLOADS}/$PUBLIC_LOG_SUBDIR/"
+                val collection = MediaStore.Downloads.EXTERNAL_CONTENT_URI
+                val existingUri = findDownloadsLogUri(resolver, collection, relativePath)
+                val targetUri = existingUri ?: resolver.insert(
+                    collection,
+                    ContentValues().apply {
+                        put(MediaStore.Downloads.DISPLAY_NAME, LOG_FILE_NAME)
+                        put(MediaStore.Downloads.MIME_TYPE, "text/plain")
+                        put(MediaStore.Downloads.RELATIVE_PATH, relativePath)
+                    }
+                )
+                targetUri?.let { uri ->
+                    resolver.openOutputStream(uri, "wa")?.use { out ->
+                        out.write(line.toByteArray())
+                    }
+                }
+            } else {
+                val dir = File(
+                    Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS),
+                    PUBLIC_LOG_SUBDIR
+                )
+                dir.mkdirs()
+                File(dir, LOG_FILE_NAME).appendText(line)
+            }
+        }.onFailure { throwable ->
+            Log.w(TAG, "Public downloads log write failed: ${throwable.message}")
+        }
+    }
+
+    private fun findDownloadsLogUri(
+        resolver: android.content.ContentResolver,
+        collection: Uri,
+        relativePath: String,
+    ): Uri? {
+        val projection = arrayOf(MediaStore.Downloads._ID)
+        val selection =
+            "${MediaStore.Downloads.DISPLAY_NAME}=? AND ${MediaStore.Downloads.RELATIVE_PATH}=?"
+        val selectionArgs = arrayOf(LOG_FILE_NAME, relativePath)
+        resolver.query(collection, projection, selection, selectionArgs, null)?.use { cursor ->
+            if (cursor.moveToFirst()) {
+                val id = cursor.getLong(0)
+                return Uri.withAppendedPath(collection, id.toString())
+            }
+        }
+        return null
     }
 }
