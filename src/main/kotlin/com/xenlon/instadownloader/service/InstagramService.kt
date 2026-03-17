@@ -240,13 +240,19 @@ class InstagramService(
             mediaUrls.add(thumbnailUrl)
         }
 
+        val uniqueMediaUrls = mediaUrls
+            .asSequence()
+            .filter { it.isNotBlank() }
+            .distinct()
+            .toList()
+
         val caption = item.objectAt("caption")?.stringAt("text") ?: ""
         val code = item.stringAt("code") ?: ""
 
         return FeedPost(
             id = item.stringAt("id") ?: item.stringAt("pk") ?: "",
             shortcode = code,
-            mediaUrls = mediaUrls,
+            mediaUrls = uniqueMediaUrls,
             thumbnailUrl = thumbnailUrl,
             type = when {
                 isVideo -> MediaType.VIDEO
@@ -1194,6 +1200,7 @@ class InstagramService(
             // Use v1 API with pagination and keep collecting posts even when some
             // entries temporarily miss media URLs. URL fallbacks are resolved later.
             val allPosts = mutableListOf<FeedPost>()
+            val seenPostKeys = mutableSetOf<String>()
             var maxId: String? = null
             var hasMore = true
             var pageCount = 0
@@ -1226,7 +1233,10 @@ class InstagramService(
                 items.forEach { itemJson ->
                     val item = itemJson.asObjectOrNull() ?: return@forEach
                     val post = parseV1MediaItem(item)
-                    allPosts.add(post)
+                    val postKey = buildPostDedupKey(post)
+                    if (seenPostKeys.add(postKey)) {
+                        allPosts.add(post)
+                    }
                 }
 
                 hasMore = jsonResponse.booleanAt("more_available")
@@ -1242,6 +1252,18 @@ class InstagramService(
             DownloadResult.Success(allPosts)
         } catch (e: Exception) {
             DownloadResult.Error("Fehler beim Laden der Posts: ${e.message}")
+        }
+    }
+
+    private fun buildPostDedupKey(post: FeedPost): String {
+        return when {
+            post.id.isNotBlank() -> "id:${post.id}"
+            post.shortcode.isNotBlank() -> "shortcode:${post.shortcode}"
+            else -> listOf(
+                post.timestamp.toString(),
+                post.thumbnailUrl,
+                post.mediaUrls.firstOrNull().orEmpty()
+            ).joinToString("|")
         }
     }
 

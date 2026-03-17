@@ -583,6 +583,7 @@ class DownloadManager(
 
         val downloadedFiles = mutableListOf<String>()
         val queuedTasks = mutableListOf<QueuedDownloadTask>()
+        val plannedPaths = mutableSetOf<String>()
         val existingIndex = buildExistingIndex(downloadDir)
         val totalMedia = posts.sumOf { it.mediaUrls.size }
         var currentItem = 0
@@ -590,13 +591,24 @@ class DownloadManager(
 
         posts.forEach { post ->
             val timestamp = dateFormat.format(Date(post.timestamp * 1000))
+            val resolvedShortcode = post.shortcode.ifBlank { post.id.ifBlank { "post" } }
+            val normalizedPost = if (resolvedShortcode == post.shortcode) {
+                post
+            } else {
+                post.copy(shortcode = resolvedShortcode)
+            }
 
             post.mediaUrls.forEachIndexed { mediaIndex, url ->
                 currentItem++
                 val treatAsVideo = post.type == MediaType.VIDEO && post.mediaUrls.size == 1
                 val extension = DownloadFilePlanner.mediaExtension(url, treatAsVideo)
-                val plannedPath = outputPath(post, mediaIndex, extension, timestamp)
-                val metadata = metadataBuilder(post, mediaIndex, url)
+                val plannedPath = outputPath(normalizedPost, mediaIndex, extension, timestamp)
+                val metadata = metadataBuilder(normalizedPost, mediaIndex, url)
+
+                if (!plannedPaths.add(plannedPath)) {
+                    skippedCount++
+                    return@forEachIndexed
+                }
 
                 if (onlyNewDownloads && existingContains(existingIndex, plannedPath, metadata)) {
                     skippedCount++
