@@ -36,7 +36,15 @@ class AppViewModel(private val appContext: Context) {
 
     private val instagramService = InstagramService(appContext)
     private val downloadManager = DownloadManager(instagramService, appContext)
-    private val scope = CoroutineScope(Dispatchers.Main + SupervisorJob())
+    private val exceptionHandler = kotlinx.coroutines.CoroutineExceptionHandler { _, throwable ->
+        DiagnosticsReporter.logWorkerFailure(
+            label = "CoroutineException",
+            outputPath = "",
+            reason = throwable.message ?: throwable::class.java.simpleName,
+            throwable = throwable,
+        )
+    }
+    private val scope = CoroutineScope(Dispatchers.Main + SupervisorJob() + exceptionHandler)
     private val json = Json { ignoreUnknownKeys = true; isLenient = true }
 
     private val prefs: SharedPreferences =

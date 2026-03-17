@@ -31,7 +31,15 @@ class DownloadManager(
     private val instagramService: InstagramService = InstagramService(),
     private val appContext: android.content.Context? = null,
 ) {
-    private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+    private val exceptionHandler = kotlinx.coroutines.CoroutineExceptionHandler { _, throwable ->
+        DiagnosticsReporter.logWorkerFailure(
+            label = "DownloadManagerException",
+            outputPath = "",
+            reason = throwable.message ?: throwable::class.java.simpleName,
+            throwable = throwable,
+        )
+    }
+    private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob() + exceptionHandler)
 
     private val _downloadProgress = MutableStateFlow<DownloadProgress>(DownloadProgress.Idle)
     val downloadProgress: StateFlow<DownloadProgress> = _downloadProgress.asStateFlow()
@@ -707,6 +715,9 @@ class DownloadManager(
                     return@forEach
                 }
 
+                // Only read meta files if they're small (<4KB) to avoid OOM
+                // on devices with many downloads
+                if (file.length() > 4096) return@forEach
                 runCatching {
                     val metadata = metadataJson.decodeFromString<DownloadedMediaMetadata>(file.readText())
                     existingKeys.add(metadataKey(metadata))

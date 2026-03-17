@@ -121,12 +121,28 @@ class DownloadWorker(
                 request
             }
 
-            // Enqueue downloads as independent parallel work items instead of a
-            // sequential chain. CDN downloads don't need throttling and can run
-            // concurrently for much faster batch downloads.
+            // Enqueue downloads in small batches as parallel chains.
+            // Each batch runs concurrently (fast), but batches run sequentially
+            // to limit memory usage. WorkManager itself also limits concurrent
+            // workers, but batching prevents queuing hundreds of heavy tasks.
             val workManager = WorkManager.getInstance(context)
-            requests.forEach { request ->
-                workManager.enqueue(request)
+            val batchSize = 4 // Max concurrent downloads per batch
+            val batches = requests.chunked(batchSize)
+
+            if (batches.size <= 1) {
+                // Single batch: just enqueue all
+                requests.forEach { workManager.enqueue(it) }
+            } else {
+                // Chain batches: batch1 runs in parallel, then batch2, etc.
+                var continuation = workManager.beginUniqueWork(
+                    UNIQUE_QUEUE_NAME,
+                    ExistingWorkPolicy.APPEND_OR_REPLACE,
+                    batches.first(),
+                )
+                batches.drop(1).forEach { batch ->
+                    continuation = continuation.then(batch)
+                }
+                continuation.enqueue()
             }
 
             return requests.map { it.id }

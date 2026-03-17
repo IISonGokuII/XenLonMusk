@@ -1070,18 +1070,19 @@ class InstagramService(
                 return@withContext fetchFeedPostsFromWebProfile(username)
             }
 
-            // Use v1 API with pagination
+            // Use v1 API with pagination. Smaller page size (18) reduces per-response
+            // RAM usage since bodyAsText() holds the full JSON string in memory.
             val allPosts = mutableListOf<FeedPost>()
             var maxId: String? = null
             var hasMore = true
             var pageCount = 0
-            val maxPages = 15 // Conservative limit to avoid triggering automated behavior detection
+            val maxPages = 20
 
             while (hasMore && pageCount < maxPages) {
                 pageCount++
                 val response = throttledRequest("Posts laden", "Feed-Seite $pageCount") {
                     client.get("$BASE_URL/api/v1/feed/user/$effectiveUserId/") {
-                    parameter("count", "33")
+                    parameter("count", "18")
                     if (maxId != null) parameter("max_id", maxId)
                     if (isLoggedIn) addAuthHeaders("$BASE_URL/$username/")
                     else addAnonHeaders("$BASE_URL/$username/")
@@ -1090,14 +1091,13 @@ class InstagramService(
 
                 if (response.status != HttpStatusCode.OK) {
                     if (allPosts.isEmpty()) {
-                        // Fallback to web_profile_info
                         return@withContext fetchFeedPostsFromWebProfile(username)
                     }
                     break
                 }
 
-                val body = response.bodyAsText()
-                val jsonResponse = json.decodeFromString<JsonObject>(body)
+                // Parse and immediately release the JSON string to reduce memory pressure
+                val jsonResponse = json.decodeFromString<JsonObject>(response.bodyAsText())
 
                 val items = jsonResponse.arrayAt("items")
                 if (items.isNullOrEmpty()) break
@@ -1112,7 +1112,7 @@ class InstagramService(
                     ?: jsonResponse.stringAt("more_available")?.toBooleanStrictOrNull()
                     ?: (jsonResponse.stringAt("more_available") == "1")
                 val newMaxId = jsonResponse.stringAt("next_max_id")
-                if (newMaxId == maxId) break // Prevent infinite loop with same max_id
+                if (newMaxId == maxId) break
                 maxId = newMaxId
 
                 if (allPosts.size >= 500) break
