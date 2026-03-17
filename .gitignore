@@ -40,3 +40,4 @@ keystore.properties
 *.jks
 *.keystore
 google-services.json
+.local-repo/
