@@ -181,6 +181,56 @@ sealed class DownloadResult<out T> {
     data class TwoFactorRequired(val twoFactorInfo: TwoFactorInfo) : DownloadResult<Nothing>()
 }
 
+/**
+ * A profile on the watchlist for automatic new-content monitoring.
+ */
+@Serializable
+data class WatchlistEntry(
+    val username: String,
+    val userId: String = "",
+    val profilePicUrl: String = "",
+    val fullName: String = "",
+    val enabled: Boolean = true,
+    val checkStories: Boolean = true,
+    val checkPosts: Boolean = true,
+    val checkReels: Boolean = false,
+    val lastCheckedTimestamp: Long = 0L,
+    val lastKnownPostCount: Int = 0,
+    val lastKnownStoryCount: Int = 0,
+    val addedTimestamp: Long = System.currentTimeMillis(),
+)
+
+/**
+ * Result of a watchlist check for a single profile.
+ */
+data class WatchlistCheckResult(
+    val username: String,
+    val newPostCount: Int = 0,
+    val newStoryCount: Int = 0,
+    val newReelCount: Int = 0,
+)
+
+/**
+ * Download statistics snapshot.
+ */
+@Serializable
+data class DownloadStats(
+    val totalDownloads: Long = 0,
+    val totalSizeBytes: Long = 0,
+    val imageCount: Long = 0,
+    val videoCount: Long = 0,
+    val perUserStats: Map<String, UserDownloadStats> = emptyMap(),
+    val dailyDownloads: Map<String, Int> = emptyMap(),
+)
+
+@Serializable
+data class UserDownloadStats(
+    val username: String,
+    val downloadCount: Int = 0,
+    val totalSizeBytes: Long = 0,
+    val categories: Map<String, Int> = emptyMap(),
+)
+
 // --- JSON response models for Instagram's public API ---
 
 @Serializable

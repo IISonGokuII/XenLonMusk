@@ -118,6 +118,7 @@ private fun rememberVideoThumbnail(file: java.io.File): Bitmap? {
 @Composable
 fun GalleryScreen(
     galleryItems: List<GalleryItem>,
+    lastGalleryVisit: Long = 0L,
     onBack: () -> Unit,
     onRefresh: () -> Unit,
     onSaveToGallery: (GalleryItem) -> Unit,
@@ -192,6 +193,7 @@ fun GalleryScreen(
         if (folder != null) {
             UserFolderScreen(
                 folder = folder,
+                lastGalleryVisit = lastGalleryVisit,
                 isMultiSelectMode = isMultiSelectMode,
                 selectedItems = selectedItems,
                 onBack = {
@@ -401,8 +403,12 @@ fun GalleryScreen(
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
                 items(userFolders, key = { it.username }) { folder ->
+                    val newCount = if (lastGalleryVisit > 0L) {
+                        folder.items.count { it.lastModified > lastGalleryVisit }
+                    } else 0
                     UserFolderCard(
                         folder = folder,
+                        newItemCount = newCount,
                         onClick = { selectedUser = folder.username }
                     )
                 }
@@ -414,6 +420,7 @@ fun GalleryScreen(
 @Composable
 private fun UserFolderCard(
     folder: UserFolder,
+    newItemCount: Int = 0,
     onClick: () -> Unit
 ) {
     val context = LocalContext.current
@@ -498,15 +505,39 @@ private fun UserFolderCard(
                 val videoCount = folder.items.count { it.isVideo }
                 val imageCount = folder.items.size - videoCount
 
-                Text(
-                    buildString {
-                        append("$imageCount Bilder")
-                        if (videoCount > 0) append(", $videoCount Videos")
-                    },
-                    fontSize = 11.sp,
-                    color = TextSecondary,
-                    maxLines = 1
-                )
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    Text(
+                        buildString {
+                            append("$imageCount Bilder")
+                            if (videoCount > 0) append(", $videoCount Videos")
+                        },
+                        fontSize = 11.sp,
+                        color = TextSecondary,
+                        maxLines = 1
+                    )
+                    if (newItemCount > 0) {
+                        Box(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(4.dp))
+                                .background(
+                                    Brush.linearGradient(
+                                        colors = listOf(InstagramPurple, InstagramPink)
+                                    )
+                                )
+                                .padding(horizontal = 5.dp, vertical = 1.dp)
+                        ) {
+                            Text(
+                                "+$newItemCount",
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = Color.White
+                            )
+                        }
+                    }
+                }
             }
         }
     }
@@ -516,6 +547,7 @@ private fun UserFolderCard(
 @Composable
 private fun UserFolderScreen(
     folder: UserFolder,
+    lastGalleryVisit: Long = 0L,
     isMultiSelectMode: Boolean,
     selectedItems: Set<String>,
     onBack: () -> Unit,
@@ -769,10 +801,12 @@ private fun UserFolderScreen(
             verticalArrangement = Arrangement.spacedBy(4.dp)
         ) {
             items(filteredItems, key = { it.file.absolutePath }) { item ->
+                val isNew = lastGalleryVisit > 0L && item.lastModified > lastGalleryVisit
                 GalleryThumbnail(
                     item = item,
                     isSelected = selectedItems.contains(item.file.absolutePath),
                     isMultiSelectMode = isMultiSelectMode,
+                    isNew = isNew,
                     onClick = {
                         if (isMultiSelectMode) onToggleItem(item)
                         else onOpenViewer(filteredItems, item)
@@ -793,6 +827,7 @@ private fun GalleryThumbnail(
     item: GalleryItem,
     isSelected: Boolean = false,
     isMultiSelectMode: Boolean = false,
+    isNew: Boolean = false,
     onClick: () -> Unit,
     onLongClick: () -> Unit = {}
 ) {
@@ -908,6 +943,30 @@ private fun GalleryThumbnail(
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis
             )
+        }
+
+        // "Neu" badge for recently downloaded items
+        if (isNew) {
+            Box(
+                modifier = Modifier
+                    .align(Alignment.BottomEnd)
+                    .padding(4.dp)
+                    .clip(RoundedCornerShape(4.dp))
+                    .background(
+                        Brush.linearGradient(
+                            colors = listOf(InstagramPurple, InstagramPink)
+                        )
+                    )
+                    .padding(horizontal = 5.dp, vertical = 2.dp)
+            ) {
+                Text(
+                    "NEU",
+                    fontSize = 8.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = Color.White,
+                    letterSpacing = 0.5.sp
+                )
+            }
         }
     }
 }

@@ -141,14 +141,22 @@ class MainActivity : ComponentActivity() {
                             onDismissClipboardUrl = { viewModel.dismissClipboardUrl() },
                             onLogout = { viewModel.logout() },
                             onOpenQueue = { viewModel.openQueue() },
-                            onOpenGallery = { viewModel.openGallery() }
+                            onOpenGallery = { viewModel.openGallery() },
+                            onOpenBrowser = { viewModel.openBrowser() },
+                            onOpenStats = { viewModel.openStats() },
+                            isOnWatchlist = viewModel.isOnWatchlist.collectAsState().value,
+                            onToggleWatchlist = {
+                                currentProfile?.let { viewModel.toggleWatchlist(it) }
+                            }
                         )
                     }
 
                     AppViewModel.Screen.GALLERY -> {
                         val context = this@MainActivity
+                        val lastVisit by viewModel.lastGalleryVisit.collectAsState()
                         GalleryScreen(
                             galleryItems = galleryItems,
+                            lastGalleryVisit = lastVisit,
                             onBack = { viewModel.closeGallery() },
                             onRefresh = { viewModel.loadGalleryItems() },
                             onSaveToGallery = { item ->
@@ -188,6 +196,21 @@ class MainActivity : ComponentActivity() {
                             onRetryFailedItems = { viewModel.retryFailedQueueItems() },
                             onCancelActiveItems = { viewModel.cancelActiveQueueItems() },
                             onClearFinishedItems = { viewModel.clearFinishedQueueItems() }
+                        )
+                    }
+
+                    AppViewModel.Screen.STATS -> {
+                        val stats by viewModel.downloadStats.collectAsState()
+                        StatsScreen(
+                            stats = stats,
+                            onBack = { viewModel.closeStats() }
+                        )
+                    }
+
+                    AppViewModel.Screen.BROWSER -> {
+                        BrowserScreen(
+                            onBack = { viewModel.closeBrowser() },
+                            onDownloadUrl = { url -> viewModel.handleBrowserDownload(url) }
                         )
                     }
                 }

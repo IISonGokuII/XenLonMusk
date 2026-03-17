@@ -15,6 +15,7 @@ import com.xenlon.instadownloader.service.DownloadProgress
 import com.xenlon.instadownloader.service.DownloadWorker
 import com.xenlon.instadownloader.service.DiagnosticsReporter
 import com.xenlon.instadownloader.service.InstagramService
+import com.xenlon.instadownloader.service.WatchlistWorker
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -52,7 +53,7 @@ class AppViewModel(private val appContext: Context) {
     private val fileNameTimestampFormat = SimpleDateFormat("yyyy-MM-dd_HH-mm-ss", Locale.getDefault())
 
     // Screen state
-    enum class Screen { LOGIN, MAIN, GALLERY, QUEUE }
+    enum class Screen { LOGIN, MAIN, GALLERY, QUEUE, STATS, BROWSER }
 
     private val _currentScreen = MutableStateFlow(Screen.LOGIN)
     val currentScreen: StateFlow<Screen> = _currentScreen.asStateFlow()
@@ -300,8 +301,9 @@ class AppViewModel(private val appContext: Context) {
                     _isSearchLoading.value = false
                     val userId = result.data.userId
 
-                    // Add to search history
+                    // Add to search history and check watchlist
                     addToSearchHistory(result.data)
+                    checkWatchlistStatus(username)
 
                     // Check if this is the logged-in user's own profile
                     val isOwn = !_isAnonymousMode.value &&
@@ -607,8 +609,7 @@ class AppViewModel(private val appContext: Context) {
     // --- Gallery ---
 
     fun openGallery() {
-        loadGalleryItems()
-        _currentScreen.value = Screen.GALLERY
+        openGalleryAndTrackVisit()
     }
 
     fun closeGallery() {
@@ -1016,6 +1017,143 @@ class AppViewModel(private val appContext: Context) {
     }
 
     fun getDownloadDir(): String = downloadManager.getDownloadDir()
+
+    // --- Watchlist ---
+
+    private val _watchlist = MutableStateFlow<List<WatchlistEntry>>(emptyList())
+    val watchlist: StateFlow<List<WatchlistEntry>> = _watchlist.asStateFlow()
+
+    private val _isOnWatchlist = MutableStateFlow(false)
+    val isOnWatchlist: StateFlow<Boolean> = _isOnWatchlist.asStateFlow()
+
+    fun loadWatchlist() {
+        _watchlist.value = WatchlistWorker.loadWatchlist(appContext)
+    }
+
+    fun toggleWatchlist(profile: UserProfile) {
+        val username = profile.username
+        if (WatchlistWorker.isOnWatchlist(appContext, username)) {
+            WatchlistWorker.removeFromWatchlist(appContext, username)
+            _isOnWatchlist.value = false
+        } else {
+            WatchlistWorker.addToWatchlist(appContext, WatchlistEntry(
+                username = username,
+                userId = profile.userId,
+                profilePicUrl = profile.profilePicUrl,
+                fullName = profile.fullName,
+            ))
+            _isOnWatchlist.value = true
+            // Start periodic checks if not already running
+            WatchlistWorker.schedule(appContext)
+        }
+        loadWatchlist()
+    }
+
+    fun checkWatchlistStatus(username: String) {
+        _isOnWatchlist.value = WatchlistWorker.isOnWatchlist(appContext, username)
+    }
+
+    // --- Statistics ---
+
+    private val _downloadStats = MutableStateFlow(DownloadStats())
+    val downloadStats: StateFlow<DownloadStats> = _downloadStats.asStateFlow()
+
+    fun loadStats() {
+        scope.launch(Dispatchers.IO) {
+            val dir = File(downloadManager.getDownloadDir())
+            if (!dir.exists()) {
+                _downloadStats.value = DownloadStats()
+                return@launch
+            }
+
+            var totalSize = 0L
+            var imageCount = 0L
+            var videoCount = 0L
+            val perUser = mutableMapOf<String, MutableList<Pair<String, Long>>>() // username -> (category, size)
+            val daily = mutableMapOf<String, Int>()
+            val dateFormat = java.text.SimpleDateFormat("dd.MM.", java.util.Locale.getDefault())
+
+            dir.walkTopDown()
+                .filter { it.isFile && !it.name.endsWith(".meta.json") && !it.name.startsWith(".") }
+                .filter { it.extension.lowercase() in listOf("jpg", "jpeg", "png", "webp", "mp4", "mov") }
+                .forEach { file ->
+                    val size = file.length()
+                    totalSize += size
+                    val isVideo = file.extension.lowercase() in listOf("mp4", "mov")
+                    if (isVideo) videoCount++ else imageCount++
+
+                    val relativePath = file.relativeTo(dir).path
+                    val parts = relativePath.split(File.separator)
+                    val username = if (parts.size >= 2) parts[0] else "Andere"
+                    val category = if (parts.size >= 3) parts[1] else "posts"
+
+                    perUser.getOrPut(username) { mutableListOf() }.add(category to size)
+
+                    val day = dateFormat.format(java.util.Date(file.lastModified()))
+                    daily[day] = (daily[day] ?: 0) + 1
+                }
+
+            val userStats = perUser.map { (username, items) ->
+                username to UserDownloadStats(
+                    username = username,
+                    downloadCount = items.size,
+                    totalSizeBytes = items.sumOf { it.second },
+                    categories = items.groupBy { it.first }.mapValues { it.value.size }
+                )
+            }.toMap()
+
+            _downloadStats.value = DownloadStats(
+                totalDownloads = imageCount + videoCount,
+                totalSizeBytes = totalSize,
+                imageCount = imageCount,
+                videoCount = videoCount,
+                perUserStats = userStats,
+                dailyDownloads = daily,
+            )
+        }
+    }
+
+    // --- Gallery "Neu" tracking ---
+
+    private val _lastGalleryVisit = MutableStateFlow(
+        prefs.getLong("last_gallery_visit", 0L)
+    )
+    val lastGalleryVisit: StateFlow<Long> = _lastGalleryVisit.asStateFlow()
+
+    fun openGalleryAndTrackVisit() {
+        val previousVisit = prefs.getLong("last_gallery_visit", 0L)
+        _lastGalleryVisit.value = previousVisit
+        loadGalleryItems()
+        _currentScreen.value = Screen.GALLERY
+        // Update the timestamp AFTER loading so new items are compared against previous visit
+        prefs.edit().putLong("last_gallery_visit", System.currentTimeMillis()).apply()
+    }
+
+    // --- Browser ---
+
+    fun openBrowser() {
+        _currentScreen.value = Screen.BROWSER
+    }
+
+    fun closeBrowser() {
+        _currentScreen.value = Screen.MAIN
+    }
+
+    fun handleBrowserDownload(url: String) {
+        _currentScreen.value = Screen.MAIN
+        handleShareIntent(url)
+    }
+
+    // --- Stats screen ---
+
+    fun openStats() {
+        loadStats()
+        _currentScreen.value = Screen.STATS
+    }
+
+    fun closeStats() {
+        _currentScreen.value = Screen.MAIN
+    }
 
     fun dispose() {
         val clipboard = appContext.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager

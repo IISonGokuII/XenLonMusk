@@ -125,7 +125,11 @@ fun MainScreen(
     onDismissClipboardUrl: () -> Unit = {},
     onLogout: () -> Unit,
     onOpenQueue: () -> Unit = {},
-    onOpenGallery: () -> Unit
+    onOpenGallery: () -> Unit,
+    onOpenBrowser: () -> Unit = {},
+    onOpenStats: () -> Unit = {},
+    isOnWatchlist: Boolean = false,
+    onToggleWatchlist: () -> Unit = {},
 ) {
     var searchQuery by remember { mutableStateOf("") }
     var profileSearchQuery by remember(profile?.username) { mutableStateOf("") }
@@ -168,8 +172,14 @@ fun MainScreen(
                 }
             },
             actions = {
+                IconButton(onClick = onOpenBrowser) {
+                    Icon(Icons.Default.Language, "Browser", tint = TextSecondary)
+                }
                 IconButton(onClick = onOpenGallery) {
                     Icon(Icons.Default.PhotoLibrary, "Galerie", tint = TextSecondary)
+                }
+                IconButton(onClick = onOpenStats) {
+                    Icon(Icons.Default.BarChart, "Statistiken", tint = TextSecondary)
                 }
                 IconButton(onClick = onOpenQueue) {
                     Icon(Icons.Default.PendingActions, "Queue", tint = TextSecondary)
@@ -410,7 +420,9 @@ fun MainScreen(
             if (profile != null) {
                 ProfileCard(
                     profile = profile,
-                    onDownloadProfilePic = onDownloadProfilePic
+                    onDownloadProfilePic = onDownloadProfilePic,
+                    isOnWatchlist = isOnWatchlist,
+                    onToggleWatchlist = onToggleWatchlist
                 )
 
                 ProfileExplorerCard(
@@ -993,7 +1005,9 @@ private fun HistoryChip(
 @Composable
 private fun ProfileCard(
     profile: UserProfile,
-    onDownloadProfilePic: () -> Unit
+    onDownloadProfilePic: () -> Unit,
+    isOnWatchlist: Boolean = false,
+    onToggleWatchlist: () -> Unit = {},
 ) {
     val context = LocalContext.current
 
@@ -1077,21 +1091,39 @@ private fun ProfileCard(
                     }
                 }
 
-                // Download profile pic button
-                FilledTonalButton(
-                    onClick = onDownloadProfilePic,
-                    shape = RoundedCornerShape(12.dp),
-                    colors = ButtonDefaults.filledTonalButtonColors(
-                        containerColor = DarkSurfaceVariant
-                    )
-                ) {
-                    Icon(
-                        Icons.Default.Download,
-                        contentDescription = "Profilbild herunterladen",
-                        modifier = Modifier.size(18.dp)
-                    )
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text("Profilbild", fontSize = 13.sp)
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    // Download profile pic button
+                    FilledTonalButton(
+                        onClick = onDownloadProfilePic,
+                        shape = RoundedCornerShape(12.dp),
+                        colors = ButtonDefaults.filledTonalButtonColors(
+                            containerColor = DarkSurfaceVariant
+                        )
+                    ) {
+                        Icon(
+                            Icons.Default.Download,
+                            contentDescription = "Profilbild herunterladen",
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("Profilbild", fontSize = 13.sp)
+                    }
+
+                    // Watchlist toggle button
+                    FilledTonalButton(
+                        onClick = onToggleWatchlist,
+                        shape = RoundedCornerShape(12.dp),
+                        colors = ButtonDefaults.filledTonalButtonColors(
+                            containerColor = if (isOnWatchlist) AccentPink.copy(alpha = 0.2f) else DarkSurfaceVariant
+                        )
+                    ) {
+                        Icon(
+                            if (isOnWatchlist) Icons.Default.Notifications else Icons.Default.NotificationsNone,
+                            contentDescription = if (isOnWatchlist) "Von Watchlist entfernen" else "Zur Watchlist",
+                            tint = if (isOnWatchlist) AccentPink else TextSecondary,
+                            modifier = Modifier.size(18.dp)
+                        )
+                    }
                 }
             }
 
