@@ -76,7 +76,9 @@ private enum class GridSize(val columns: Int, val icon: @Composable () -> Unit) 
 }
 
 /**
- * Extracts a video thumbnail bitmap. Returns null on failure.
+ * Extracts a scaled-down video thumbnail bitmap. Full-size frames from
+ * MediaMetadataRetriever can be 8+ MB each (1920x1080 ARGB_8888).
+ * Scaling to 256px keeps thumbnails under 100KB each.
  */
 @Composable
 private fun rememberVideoThumbnail(file: java.io.File): Bitmap? {
@@ -89,7 +91,20 @@ private fun rememberVideoThumbnail(file: java.io.File): Bitmap? {
                 retriever.setDataSource(file.absolutePath)
                 val frame = retriever.getFrameAtTime(0, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
                 retriever.release()
-                frame
+                // Scale down to thumbnail size to save RAM
+                if (frame != null && (frame.width > 256 || frame.height > 256)) {
+                    val scale = 256f / maxOf(frame.width, frame.height)
+                    val scaled = Bitmap.createScaledBitmap(
+                        frame,
+                        (frame.width * scale).toInt(),
+                        (frame.height * scale).toInt(),
+                        true
+                    )
+                    if (scaled !== frame) frame.recycle()
+                    scaled
+                } else {
+                    frame
+                }
             } catch (_: Exception) {
                 null
             }
@@ -952,9 +967,12 @@ private fun GalleryPagerViewer(
             )
         )
 
-        // Swipeable pager content
+        // Swipeable pager content. beyondViewportPageCount=0 means only the
+        // current page is composed - critical for videos since each page creates
+        // an ExoPlayer instance that buffers video into RAM.
         HorizontalPager(
             state = pagerState,
+            beyondBoundsPageCount = 0,
             modifier = Modifier
                 .weight(1f)
                 .fillMaxWidth()
