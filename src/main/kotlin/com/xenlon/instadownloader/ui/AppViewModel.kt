@@ -567,15 +567,33 @@ class AppViewModel(private val appContext: Context) {
     private fun startClipboardMonitoring() {
         val clipboard = appContext.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager ?: return
         clipboardListener = ClipboardManager.OnPrimaryClipChangedListener {
-            val clip = clipboard.primaryClip
-            if (clip != null && clip.itemCount > 0) {
-                val text = clip.getItemAt(0).text?.toString() ?: return@OnPrimaryClipChangedListener
-                if (text.contains("instagram.com/")) {
+            runCatching {
+                val clip = clipboard.primaryClip ?: return@runCatching
+                if (clip.itemCount <= 0) return@runCatching
+                val item = clip.getItemAt(0) ?: return@runCatching
+                val text = item.coerceToText(appContext)?.toString()?.trim().orEmpty()
+                if (text.contains("instagram.com/", ignoreCase = true)) {
                     _clipboardUrl.value = text
                 }
+            }.onFailure { throwable ->
+                DiagnosticsReporter.logWorkerFailure(
+                    label = "ClipboardListener",
+                    outputPath = "",
+                    reason = throwable.message ?: "Clipboard access failed",
+                    throwable = throwable,
+                )
             }
         }
-        clipboard.addPrimaryClipChangedListener(clipboardListener)
+        runCatching {
+            clipboard.addPrimaryClipChangedListener(clipboardListener)
+        }.onFailure { throwable ->
+            DiagnosticsReporter.logWorkerFailure(
+                label = "ClipboardRegistration",
+                outputPath = "",
+                reason = throwable.message ?: "Clipboard listener registration failed",
+                throwable = throwable,
+            )
+        }
     }
 
     fun handleClipboardUrl() {

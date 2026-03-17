@@ -14,6 +14,7 @@ import kotlinx.coroutines.withContext
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+import java.util.concurrent.TimeUnit
 
 /**
  * WorkManager worker for background downloads with notification progress.
@@ -105,6 +106,11 @@ class DownloadWorker(
                             .setRequiredNetworkType(NetworkType.CONNECTED)
                             .build()
                     )
+                    .setBackoffCriteria(
+                        BackoffPolicy.EXPONENTIAL,
+                        20,
+                        TimeUnit.SECONDS
+                    )
                     .addTag(UNIQUE_QUEUE_NAME)
                     .build()
 
@@ -126,7 +132,7 @@ class DownloadWorker(
             // to limit memory usage. WorkManager itself also limits concurrent
             // workers, but batching prevents queuing hundreds of heavy tasks.
             val workManager = WorkManager.getInstance(context)
-            val batchSize = 4 // Max concurrent downloads per batch
+            val batchSize = 2 // Keep concurrency low to avoid memory spikes on large profiles
             val batches = requests.chunked(batchSize)
 
             if (batches.size <= 1) {
@@ -248,17 +254,43 @@ class DownloadWorker(
                     showCompleteNotification(label)
                     Result.success(workDataOf("output_path" to outputPath))
                 }
+                is DownloadResult.Error -> {
+                    if (shouldRetry(result)) {
+                        DiagnosticsReporter.logWorkerFailure(
+                            label = label,
+                            outputPath = outputPath,
+                            reason = "Retrying download (${runAttemptCount + 1}): ${result.message}",
+                        )
+                        return@withContext Result.retry()
+                    }
+                    DiagnosticsReporter.logWorkerFailure(
+                        label = label,
+                        outputPath = outputPath,
+                        reason = result.message,
+                    )
+                    showErrorNotification(label)
+                    Result.failure()
+                }
                 else -> {
                     DiagnosticsReporter.logWorkerFailure(
                         label = label,
                         outputPath = outputPath,
-                        reason = (result as? DownloadResult.Error)?.message ?: "Unknown download result",
+                        reason = "Unknown download result",
                     )
                     showErrorNotification(label)
                     Result.failure()
                 }
             }
         } catch (e: Exception) {
+            if (shouldRetry(e)) {
+                DiagnosticsReporter.logWorkerFailure(
+                    label = label,
+                    outputPath = outputPath,
+                    reason = "Retrying exception (${runAttemptCount + 1}): ${e.message ?: e::class.java.simpleName}",
+                    throwable = e,
+                )
+                return@withContext Result.retry()
+            }
             DiagnosticsReporter.logWorkerFailure(
                 label = label,
                 outputPath = outputPath,
@@ -268,6 +300,24 @@ class DownloadWorker(
             showErrorNotification(label)
             Result.failure()
         }
+    }
+
+    private fun shouldRetry(error: DownloadResult.Error): Boolean {
+        if (runAttemptCount >= 3) return false
+        val code = error.code
+        if (code in listOf(408, 425, 429, 500, 502, 503, 504)) return true
+        val text = error.message.lowercase()
+        return text.contains("timeout") ||
+            text.contains("tempor") ||
+            text.contains("connection") ||
+            text.contains("network") ||
+            text.contains("reset") ||
+            text.contains("eof")
+    }
+
+    private fun shouldRetry(throwable: Exception): Boolean {
+        if (runAttemptCount >= 3) return false
+        return throwable is java.io.IOException || throwable is io.ktor.client.plugins.HttpRequestTimeoutException
     }
 
     private fun createForegroundInfo(label: String, progress: Int): ForegroundInfo {

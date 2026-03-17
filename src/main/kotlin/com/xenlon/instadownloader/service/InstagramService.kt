@@ -128,8 +128,13 @@ class InstagramService(
      */
     private fun pickImageCandidate(candidates: JsonArray?): String {
         if (candidates.isNullOrEmpty()) return ""
-        val index = if (preferHD) 0 else candidates.size - 1
-        return candidates.getOrNull(index).asObjectOrNull()?.stringAt("url") ?: ""
+
+        val ordered = if (preferHD) candidates else candidates.reversed()
+        ordered.forEach { candidate ->
+            val url = candidate.asObjectOrNull()?.stringAt("url").orEmpty()
+            if (url.isNotBlank()) return url
+        }
+        return ""
     }
 
     /**
@@ -138,8 +143,13 @@ class InstagramService(
      */
     private fun pickVideoVersion(versions: JsonArray?): String {
         if (versions.isNullOrEmpty()) return ""
-        val index = if (preferHD) 0 else versions.size - 1
-        return versions.getOrNull(index).asObjectOrNull()?.stringAt("url") ?: ""
+
+        val ordered = if (preferHD) versions else versions.reversed()
+        ordered.forEach { version ->
+            val url = version.asObjectOrNull()?.stringAt("url").orEmpty()
+            if (url.isNotBlank()) return url
+        }
+        return ""
     }
 
     /**
@@ -160,23 +170,33 @@ class InstagramService(
                 val ciIsVideo = ciType == 2
                 val url = if (ciIsVideo) {
                     pickVideoVersion(ci.arrayAt("video_versions"))
+                        .ifBlank { ci.stringAt("video_url").orEmpty() }
                 } else {
                     pickImageCandidate(ci.objectAt("image_versions2")?.arrayAt("candidates"))
+                        .ifBlank { ci.stringAt("image_url").orEmpty() }
+                        .ifBlank { ci.stringAt("display_url").orEmpty() }
                 }
                 if (url.isNotEmpty()) mediaUrls.add(url)
             }
         } else {
             val url = if (isVideo) {
                 pickVideoVersion(item.arrayAt("video_versions"))
+                    .ifBlank { item.stringAt("video_url").orEmpty() }
             } else {
                 pickImageCandidate(item.objectAt("image_versions2")?.arrayAt("candidates"))
+                    .ifBlank { item.stringAt("image_url").orEmpty() }
+                    .ifBlank { item.stringAt("display_url").orEmpty() }
             }
             if (url.isNotEmpty()) mediaUrls.add(url)
         }
 
         val thumbnailUrl = pickImageCandidate(
             item.objectAt("image_versions2")?.arrayAt("candidates")
-        )
+        ).ifBlank { item.stringAt("display_url").orEmpty() }
+
+        if (mediaUrls.isEmpty() && thumbnailUrl.isNotBlank()) {
+            mediaUrls.add(thumbnailUrl)
+        }
 
         val caption = item.objectAt("caption")?.stringAt("text") ?: ""
         val code = item.stringAt("code") ?: ""
@@ -238,15 +258,57 @@ class InstagramService(
 
                 val file = java.io.File(outputPath)
                 file.parentFile?.mkdirs()
+                val tempFile = java.io.File("${outputPath}.part")
+                if (tempFile.exists()) {
+                    tempFile.delete()
+                }
+
                 response.bodyAsChannel().toInputStream().use { input ->
-                    file.outputStream().buffered().use { output ->
+                    tempFile.outputStream().buffered().use { output ->
                         input.copyTo(output)
                     }
                 }
 
+                val expectedLength = response.contentLength()
+                val actualLength = tempFile.length()
+                if (actualLength <= 0L) {
+                    tempFile.delete()
+                    return@withContext DownloadResult.Error("Download lieferte leere Datei", -1)
+                }
+                if (expectedLength != null && expectedLength > 0L && actualLength < expectedLength) {
+                    tempFile.delete()
+                    return@withContext DownloadResult.Error(
+                        "Unvollstaendiger Download: $actualLength von $expectedLength Bytes",
+                        -1
+                    )
+                }
+
+                if (file.exists()) {
+                    file.delete()
+                }
+                val renamed = tempFile.renameTo(file)
+                if (!renamed) {
+                    tempFile.copyTo(file, overwrite = true)
+                    tempFile.delete()
+                }
+
+                if (!file.exists() || file.length() <= 0L) {
+                    return@withContext DownloadResult.Error("Datei konnte nicht gespeichert werden", -1)
+                }
+
                 DownloadResult.Success(outputPath)
             } catch (e: Exception) {
-                DownloadResult.Error("Download-Fehler: ${e.message}")
+                when (e) {
+                    is HttpRequestTimeoutException -> DownloadResult.Error(
+                        "Download-Timeout: ${e.message}",
+                        408
+                    )
+                    is IOException -> DownloadResult.Error(
+                        "Netzwerkfehler beim Download: ${e.message}",
+                        -1
+                    )
+                    else -> DownloadResult.Error("Download-Fehler: ${e.message}")
+                }
             } finally {
                 cdnClient.close()
             }
@@ -1070,19 +1132,19 @@ class InstagramService(
                 return@withContext fetchFeedPostsFromWebProfile(username)
             }
 
-            // Use v1 API with pagination. Smaller page size (18) reduces per-response
-            // RAM usage since bodyAsText() holds the full JSON string in memory.
+            // Use v1 API with pagination and keep collecting posts even when some
+            // entries temporarily miss media URLs. URL fallbacks are resolved later.
             val allPosts = mutableListOf<FeedPost>()
             var maxId: String? = null
             var hasMore = true
             var pageCount = 0
-            val maxPages = 20
+            val maxPages = 40
 
             while (hasMore && pageCount < maxPages) {
                 pageCount++
                 val response = throttledRequest("Posts laden", "Feed-Seite $pageCount") {
                     client.get("$BASE_URL/api/v1/feed/user/$effectiveUserId/") {
-                    parameter("count", "18")
+                    parameter("count", "50")
                     if (maxId != null) parameter("max_id", maxId)
                     if (isLoggedIn) addAuthHeaders("$BASE_URL/$username/")
                     else addAnonHeaders("$BASE_URL/$username/")
@@ -1105,7 +1167,7 @@ class InstagramService(
                 items.forEach { itemJson ->
                     val item = itemJson.asObjectOrNull() ?: return@forEach
                     val post = parseV1MediaItem(item)
-                    if (post.mediaUrls.isNotEmpty()) allPosts.add(post)
+                    allPosts.add(post)
                 }
 
                 hasMore = jsonResponse.booleanAt("more_available")
@@ -1115,7 +1177,7 @@ class InstagramService(
                 if (newMaxId == maxId) break
                 maxId = newMaxId
 
-                if (allPosts.size >= 500) break
+                if (allPosts.size >= 1200) break
             }
 
             DownloadResult.Success(allPosts)
