@@ -1257,8 +1257,8 @@ class InstagramService(
 
     private fun buildPostDedupKey(post: FeedPost): String {
         return when {
-            post.id.isNotBlank() -> "id:${post.id}"
             post.shortcode.isNotBlank() -> "shortcode:${post.shortcode}"
+            post.id.isNotBlank() -> "id:${post.id}"
             else -> listOf(
                 post.timestamp.toString(),
                 post.thumbnailUrl,
