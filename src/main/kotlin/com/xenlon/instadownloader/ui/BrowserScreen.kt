@@ -47,14 +47,19 @@ fun BrowserScreen(
 
     // Detect if current URL is downloadable (post, reel, story, profile)
     val downloadableType = remember(currentUrl) {
+        val excludedPaths = setOf(
+            "/accounts/", "/explore/", "/direct/", "/emails/",
+            "/legal/", "/about/", "/developer/", "/challenge/",
+            "/oauth/", "/web/", "/session/", "/nux/", "/privacy/"
+        )
+        val isExcluded = excludedPaths.any { currentUrl.contains(it) }
         when {
+            isExcluded -> null
             currentUrl.contains("/p/") -> "Post"
-            currentUrl.contains("/reel/") -> "Reel"
+            currentUrl.contains("/reel/") || currentUrl.contains("/reels/") -> "Reel"
             currentUrl.contains("/stories/") -> "Story"
-            currentUrl.matches(Regex("https://www\\.instagram\\.com/[^/]+/?$")) &&
-                !currentUrl.contains("/accounts/") &&
-                !currentUrl.contains("/explore/") &&
-                !currentUrl.contains("/direct/") -> "Profil"
+            currentUrl.contains("/tv/") -> "IGTV"
+            currentUrl.matches(Regex("https?://(www\\.)?instagram\\.com/[a-zA-Z0-9._]+/?(\\?.*)?$")) -> "Profil"
             else -> null
         }
     }

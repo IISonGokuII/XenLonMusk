@@ -124,7 +124,8 @@ fun GalleryScreen(
     onSaveToGallery: (GalleryItem) -> Unit,
     onDeleteItem: (GalleryItem) -> Unit,
     onSaveMultiple: (List<GalleryItem>) -> Unit = {},
-    onDeleteMultiple: (List<GalleryItem>) -> Unit = {}
+    onDeleteMultiple: (List<GalleryItem>) -> Unit = {},
+    onExportZip: (username: String, List<GalleryItem>) -> Unit = { _, _ -> }
 ) {
     var selectedUser by remember { mutableStateOf<String?>(null) }
     var viewerStartIndex by remember { mutableIntStateOf(-1) }
@@ -228,7 +229,8 @@ fun GalleryScreen(
                     isMultiSelectMode = false
                     selectedItems = emptySet()
                 },
-                onDeleteSelected = { showBatchDeleteConfirm = true }
+                onDeleteSelected = { showBatchDeleteConfirm = true },
+                onExportZip = { onExportZip(folder.username, folder.items) }
             )
 
             if (showDeleteConfirm != null) {
@@ -556,7 +558,8 @@ private fun UserFolderScreen(
     onToggleMultiSelect: () -> Unit,
     onSelectAll: () -> Unit,
     onSaveSelected: () -> Unit,
-    onDeleteSelected: () -> Unit
+    onDeleteSelected: () -> Unit,
+    onExportZip: () -> Unit = {}
 ) {
     var selectedCategory by remember { mutableStateOf("Alle") }
     var selectedMediaFilter by remember { mutableStateOf(MediaFilter.ALL) }
@@ -693,6 +696,11 @@ private fun UserFolderScreen(
                 // Grid size toggle
                 IconButton(onClick = { gridSize = gridSize.next() }) {
                     gridSize.icon()
+                }
+                if (!isMultiSelectMode) {
+                    IconButton(onClick = onExportZip) {
+                        Icon(Icons.Default.FolderZip, "Als ZIP exportieren", tint = TextSecondary)
+                    }
                 }
                 IconButton(onClick = onToggleMultiSelect) {
                     Icon(

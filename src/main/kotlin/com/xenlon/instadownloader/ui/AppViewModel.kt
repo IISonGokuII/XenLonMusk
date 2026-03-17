@@ -54,7 +54,7 @@ class AppViewModel(private val appContext: Context) {
     private val profileCooldownOptionsMillis = listOf(15_000L, 30_000L, 60_000L, 120_000L, 180_000L)
 
     // Screen state
-    enum class Screen { LOGIN, MAIN, GALLERY, QUEUE, STATS, BROWSER }
+    enum class Screen { LOGIN, MAIN, GALLERY, QUEUE, STATS, BROWSER, WATCHLIST }
 
     private val _currentScreen = MutableStateFlow(Screen.LOGIN)
     val currentScreen: StateFlow<Screen> = _currentScreen.asStateFlow()
@@ -277,6 +277,25 @@ class AppViewModel(private val appContext: Context) {
         _loginError.value = null
     }
 
+    fun resendSmsCode() {
+        val info = _twoFactorInfo.value ?: return
+        if (!info.smsEnabled) return
+        scope.launch {
+            _isLoginLoading.value = true
+            _loginError.value = null
+            when (val result = instagramService.requestSmsCode(info.username, info.identifier)) {
+                is DownloadResult.Success -> {
+                    _loginError.value = null
+                }
+                is DownloadResult.Error -> {
+                    _loginError.value = result.message
+                }
+                else -> {}
+            }
+            _isLoginLoading.value = false
+        }
+    }
+
     fun enterAnonymousMode() {
         _isAnonymousMode.value = true
         _currentScreen.value = Screen.MAIN
@@ -459,6 +478,49 @@ class AppViewModel(private val appContext: Context) {
         val postResult = _sharedPost.value
         if (postResult !is DownloadResult.Success) return
         scope.launch { downloadManager.downloadSharedPost(postResult.data) }
+    }
+
+    fun downloadAllContent() {
+        val profile = _currentProfile.value ?: return
+        scope.launch {
+            // Profile picture
+            downloadManager.downloadProfilePicture(profile)
+
+            // Feed posts
+            (_feedPosts.value as? DownloadResult.Success)?.data?.let { posts ->
+                downloadManager.downloadFeedPosts(profile, posts)
+            }
+
+            // Stories
+            (_stories.value as? DownloadResult.Success)?.data?.let { stories ->
+                downloadManager.downloadStories(profile, stories)
+            }
+
+            // Highlights
+            (_highlights.value as? DownloadResult.Success)?.data?.let { highlights ->
+                downloadManager.downloadAllHighlights(profile, highlights)
+            }
+
+            // Reels (if loaded)
+            (_reels.value as? DownloadResult.Success)?.data?.let { reels ->
+                downloadManager.downloadReels(profile, reels)
+            }
+
+            // Tagged posts (if loaded)
+            (_taggedPosts.value as? DownloadResult.Success)?.data?.let { tagged ->
+                downloadManager.downloadTaggedPosts(profile, tagged)
+            }
+
+            // Archived posts (if own profile, if loaded)
+            if (_isOwnProfile.value) {
+                (_archivedPosts.value as? DownloadResult.Success)?.data?.let { archived ->
+                    downloadManager.downloadArchivedPosts(profile.username, archived)
+                }
+                (_savedPosts.value as? DownloadResult.Success)?.data?.let { saved ->
+                    downloadManager.downloadSavedPosts(saved)
+                }
+            }
+        }
     }
 
     fun downloadPreviewItem(category: String, sourceId: String) {
@@ -1061,6 +1123,45 @@ class AppViewModel(private val appContext: Context) {
 
     fun getDownloadDir(): String = downloadManager.getDownloadDir()
 
+    // --- ZIP Export ---
+
+    fun exportUserAsZip(context: android.content.Context, username: String, items: List<GalleryItem>) {
+        if (items.isEmpty()) return
+        scope.launch(Dispatchers.IO) {
+            try {
+                val downloadsDir = android.os.Environment.getExternalStoragePublicDirectory(
+                    android.os.Environment.DIRECTORY_DOWNLOADS
+                )
+                val zipFile = java.io.File(downloadsDir, "InstaDownloader_${username}_${System.currentTimeMillis()}.zip")
+                java.util.zip.ZipOutputStream(java.io.BufferedOutputStream(java.io.FileOutputStream(zipFile))).use { zos ->
+                    items.forEach { item ->
+                        if (item.file.exists()) {
+                            val entryName = "${item.category}/${item.name}"
+                            zos.putNextEntry(java.util.zip.ZipEntry(entryName))
+                            item.file.inputStream().use { it.copyTo(zos) }
+                            zos.closeEntry()
+                        }
+                    }
+                }
+                withContext(Dispatchers.Main) {
+                    android.widget.Toast.makeText(
+                        context,
+                        "ZIP exportiert: ${zipFile.name} (${items.size} Dateien)",
+                        android.widget.Toast.LENGTH_LONG
+                    ).show()
+                }
+            } catch (e: Exception) {
+                withContext(Dispatchers.Main) {
+                    android.widget.Toast.makeText(
+                        context,
+                        "ZIP-Export fehlgeschlagen: ${e.message}",
+                        android.widget.Toast.LENGTH_LONG
+                    ).show()
+                }
+            }
+        }
+    }
+
     // --- Watchlist ---
 
     private val _watchlist = MutableStateFlow<List<WatchlistEntry>>(emptyList())
@@ -1185,6 +1286,41 @@ class AppViewModel(private val appContext: Context) {
     fun handleBrowserDownload(url: String) {
         _currentScreen.value = Screen.MAIN
         handleShareIntent(url)
+    }
+
+    // --- Watchlist screen ---
+
+    fun openWatchlist() {
+        loadWatchlist()
+        _currentScreen.value = Screen.WATCHLIST
+    }
+
+    fun closeWatchlist() {
+        _currentScreen.value = Screen.MAIN
+    }
+
+    fun removeFromWatchlist(username: String) {
+        WatchlistWorker.removeFromWatchlist(appContext, username)
+        loadWatchlist()
+        // Update current profile watchlist status if it matches
+        if (_currentProfile.value?.username?.equals(username, ignoreCase = true) == true) {
+            _isOnWatchlist.value = false
+        }
+    }
+
+    fun toggleWatchlistEnabled(username: String) {
+        val entries = WatchlistWorker.loadWatchlist(appContext).toMutableList()
+        val idx = entries.indexOfFirst { it.username.equals(username, ignoreCase = true) }
+        if (idx >= 0) {
+            entries[idx] = entries[idx].copy(enabled = !entries[idx].enabled)
+            WatchlistWorker.saveWatchlist(appContext, entries)
+            loadWatchlist()
+        }
+    }
+
+    fun openProfileFromWatchlist(username: String) {
+        _currentScreen.value = Screen.MAIN
+        searchUser(username)
     }
 
     // --- Stats screen ---

@@ -130,6 +130,8 @@ fun MainScreen(
     onOpenGallery: () -> Unit,
     onOpenBrowser: () -> Unit = {},
     onOpenStats: () -> Unit = {},
+    onOpenWatchlist: () -> Unit = {},
+    onDownloadAllContent: () -> Unit = {},
     isOnWatchlist: Boolean = false,
     onToggleWatchlist: () -> Unit = {},
 ) {
@@ -179,6 +181,9 @@ fun MainScreen(
                 }
                 IconButton(onClick = onOpenGallery) {
                     Icon(Icons.Default.PhotoLibrary, "Galerie", tint = TextSecondary)
+                }
+                IconButton(onClick = onOpenWatchlist) {
+                    Icon(Icons.Default.Visibility, "Watchlist", tint = TextSecondary)
                 }
                 IconButton(onClick = onOpenStats) {
                     Icon(Icons.Default.BarChart, "Statistiken", tint = TextSecondary)
@@ -519,6 +524,46 @@ fun MainScreen(
                     isOnWatchlist = isOnWatchlist,
                     onToggleWatchlist = onToggleWatchlist
                 )
+
+                // "Download All" button
+                Button(
+                    onClick = onDownloadAllContent,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(48.dp),
+                    shape = RoundedCornerShape(14.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = Color.Transparent),
+                    contentPadding = PaddingValues()
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .background(
+                                Brush.horizontalGradient(
+                                    colors = listOf(InstagramPurple, InstagramPink, InstagramOrange)
+                                )
+                            ),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Icon(
+                                Icons.Default.CloudDownload,
+                                contentDescription = null,
+                                tint = Color.White,
+                                modifier = Modifier.size(20.dp)
+                            )
+                            Text(
+                                "Alles herunterladen",
+                                fontWeight = FontWeight.Bold,
+                                color = Color.White,
+                                fontSize = 15.sp
+                            )
+                        }
+                    }
+                }
 
                 ProfileExplorerCard(
                     profile = profile,

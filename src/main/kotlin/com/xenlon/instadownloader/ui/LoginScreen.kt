@@ -43,7 +43,8 @@ fun LoginScreen(
     twoFactorInfo: TwoFactorInfo? = null,
     useSms: Boolean = false,
     onSwitchToSms: () -> Unit = {},
-    onSwitchToTotp: () -> Unit = {}
+    onSwitchToTotp: () -> Unit = {},
+    onResendSmsCode: () -> Unit = {}
 ) {
     Box(
         modifier = Modifier
@@ -76,7 +77,8 @@ fun LoginScreen(
                         twoFactorInfo = twoFactorInfo,
                         useSms = useSms,
                         onSwitchToSms = onSwitchToSms,
-                        onSwitchToTotp = onSwitchToTotp
+                        onSwitchToTotp = onSwitchToTotp,
+                        onResendSmsCode = onResendSmsCode
                     )
                 } else {
                     LoginContent(
@@ -298,7 +300,8 @@ private fun TwoFactorContent(
     twoFactorInfo: TwoFactorInfo?,
     useSms: Boolean = false,
     onSwitchToSms: () -> Unit = {},
-    onSwitchToTotp: () -> Unit = {}
+    onSwitchToTotp: () -> Unit = {},
+    onResendSmsCode: () -> Unit = {}
 ) {
     var code by remember { mutableStateOf("") }
 
@@ -482,6 +485,18 @@ private fun TwoFactorContent(
             Icon(Icons.Default.Sms, contentDescription = null, modifier = Modifier.size(18.dp))
             Spacer(modifier = Modifier.width(6.dp))
             Text("Stattdessen SMS-Code anfordern", fontSize = 14.sp)
+        }
+    }
+
+    // Resend SMS code button (only when SMS mode is active)
+    if (useSms && twoFactorInfo?.smsEnabled == true) {
+        TextButton(
+            onClick = onResendSmsCode,
+            enabled = !isLoading
+        ) {
+            Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(18.dp))
+            Spacer(modifier = Modifier.width(6.dp))
+            Text("SMS-Code erneut senden", fontSize = 14.sp)
         }
     }
 

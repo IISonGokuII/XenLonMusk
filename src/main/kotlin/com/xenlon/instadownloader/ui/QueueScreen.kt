@@ -21,6 +21,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.CleaningServices
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Speed
 import androidx.compose.material.icons.filled.StopCircle
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -46,6 +47,9 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
 import com.xenlon.instadownloader.model.DownloadQueueItem
 import com.xenlon.instadownloader.model.DownloadQueueStatus
 
@@ -121,6 +125,36 @@ fun QueueScreen(
                             QueueScreenSummaryChip("Aktiv", running + waiting, AccentPink)
                             QueueScreenSummaryChip("Fehler", failed, WarningOrange)
                             QueueScreenSummaryChip("Fertig", completed, SuccessGreen)
+                        }
+
+                        // Throughput indicator
+                        AnimatedVisibility(
+                            visible = running > 0,
+                            enter = fadeIn(),
+                            exit = fadeOut()
+                        ) {
+                            Card(
+                                shape = RoundedCornerShape(10.dp),
+                                colors = CardDefaults.cardColors(containerColor = DarkSurfaceVariant)
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    Icon(
+                                        Icons.Default.Speed,
+                                        contentDescription = null,
+                                        tint = AccentPurple,
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                    Text(
+                                        "$running aktive Downloads, ${waiting} in Warteschlange",
+                                        color = TextSecondary,
+                                        fontSize = 12.sp
+                                    )
+                                }
+                            }
                         }
 
                         Row(

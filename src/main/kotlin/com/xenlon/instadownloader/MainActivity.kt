@@ -82,7 +82,8 @@ class MainActivity : ComponentActivity() {
                             twoFactorInfo = twoFactorInfo,
                             useSms = useSms2FA,
                             onSwitchToSms = { viewModel.switchToSms2FA() },
-                            onSwitchToTotp = { viewModel.switchToTotp2FA() }
+                            onSwitchToTotp = { viewModel.switchToTotp2FA() },
+                            onResendSmsCode = { viewModel.resendSmsCode() }
                         )
                     }
 
@@ -147,6 +148,8 @@ class MainActivity : ComponentActivity() {
                             onOpenGallery = { viewModel.openGallery() },
                             onOpenBrowser = { viewModel.openBrowser() },
                             onOpenStats = { viewModel.openStats() },
+                            onOpenWatchlist = { viewModel.openWatchlist() },
+                            onDownloadAllContent = { viewModel.downloadAllContent() },
                             isOnWatchlist = viewModel.isOnWatchlist.collectAsState().value,
                             onToggleWatchlist = {
                                 currentProfile?.let { viewModel.toggleWatchlist(it) }
@@ -186,6 +189,9 @@ class MainActivity : ComponentActivity() {
                                     "${items.size} Dateien gelöscht",
                                     Toast.LENGTH_SHORT
                                 ).show()
+                            },
+                            onExportZip = { username, items ->
+                                viewModel.exportUserAsZip(context, username, items)
                             }
                         )
                     }
@@ -207,6 +213,17 @@ class MainActivity : ComponentActivity() {
                         StatsScreen(
                             stats = stats,
                             onBack = { viewModel.closeStats() }
+                        )
+                    }
+
+                    AppViewModel.Screen.WATCHLIST -> {
+                        val watchlist by viewModel.watchlist.collectAsState()
+                        WatchlistScreen(
+                            entries = watchlist,
+                            onBack = { viewModel.closeWatchlist() },
+                            onRemove = { viewModel.removeFromWatchlist(it) },
+                            onToggleEnabled = { viewModel.toggleWatchlistEnabled(it) },
+                            onOpenProfile = { viewModel.openProfileFromWatchlist(it) }
                         )
                     }
 
