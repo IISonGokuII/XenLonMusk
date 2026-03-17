@@ -62,7 +62,9 @@ class InstagramService(
     private val minRequestSpacingMillis = 2500L
     private val softBurstWindowMillis = 60_000L
     private val softBurstLimit = 10
+    private val postProfileCooldownMillis = 15_000L
     private var nextAllowedRequestAtMillis = 0L
+    private var profileLoadInProgress = false
     private val _requestHealth = MutableStateFlow(RequestHealthState())
     val requestHealth: StateFlow<RequestHealthState> = _requestHealth.asStateFlow()
     private val sessionPrefs = appContext?.getSharedPreferences("instagram_session", Context.MODE_PRIVATE)
@@ -100,6 +102,36 @@ class InstagramService(
      */
     suspend fun awaitSessionReady() {
         sessionReady.await()
+    }
+
+    suspend fun <T> runProfileLoadSession(block: suspend () -> T): T {
+        requestMutex.withLock {
+            profileLoadInProgress = true
+            _requestHealth.value = RequestHealthState(
+                level = RequestHealthLevel.ACTIVE,
+                message = "Profil wird geladen. Cooldown folgt nach Abschluss.",
+                recentRequestCount = requestTimestamps.size,
+                cooldownUntilMillis = 0L,
+                lastUpdatedMillis = System.currentTimeMillis()
+            )
+        }
+
+        return try {
+            block()
+        } finally {
+            requestMutex.withLock {
+                profileLoadInProgress = false
+                val now = System.currentTimeMillis()
+                nextAllowedRequestAtMillis = maxOf(nextAllowedRequestAtMillis, now + postProfileCooldownMillis)
+                _requestHealth.value = RequestHealthState(
+                    level = RequestHealthLevel.COOLDOWN,
+                    message = "Profil komplett geladen. Kurzer Cooldown aktiv.",
+                    recentRequestCount = requestTimestamps.size,
+                    cooldownUntilMillis = nextAllowedRequestAtMillis,
+                    lastUpdatedMillis = now
+                )
+            }
+        }
     }
 
     private fun JsonElement?.asObjectOrNull(): JsonObject? = this as? JsonObject
@@ -449,6 +481,7 @@ class InstagramService(
     private suspend fun awaitRequestSlot(reason: String) {
         var waitMillis: Long
         var recentCount: Int
+        var inProfileLoad: Boolean
 
         requestMutex.withLock {
             val now = System.currentTimeMillis()
@@ -457,8 +490,9 @@ class InstagramService(
             }
 
             recentCount = requestTimestamps.size
-            val spacingWait = (nextAllowedRequestAtMillis - now).coerceAtLeast(0L)
-            val burstWait = if (recentCount >= softBurstLimit) 10_000L else 0L
+            inProfileLoad = profileLoadInProgress
+            val spacingWait = if (inProfileLoad) 0L else (nextAllowedRequestAtMillis - now).coerceAtLeast(0L)
+            val burstWait = if (inProfileLoad) 0L else if (recentCount >= softBurstLimit) 10_000L else 0L
             waitMillis = maxOf(spacingWait, burstWait)
 
             if (waitMillis > 0L) {
@@ -473,7 +507,11 @@ class InstagramService(
             } else {
                 _requestHealth.value = RequestHealthState(
                     level = RequestHealthLevel.ACTIVE,
-                    message = "Lädt mit reduziertem Tempo: $reason",
+                    message = if (inProfileLoad) {
+                        "Profil-Ladesession aktiv: $reason"
+                    } else {
+                        "Lädt mit reduziertem Tempo: $reason"
+                    },
                     recentRequestCount = recentCount,
                     cooldownUntilMillis = 0L,
                     lastUpdatedMillis = now
@@ -488,10 +526,16 @@ class InstagramService(
         requestMutex.withLock {
             val now = System.currentTimeMillis()
             requestTimestamps.addLast(now)
-            nextAllowedRequestAtMillis = now + minRequestSpacingMillis
+            if (!profileLoadInProgress) {
+                nextAllowedRequestAtMillis = now + minRequestSpacingMillis
+            }
             _requestHealth.value = RequestHealthState(
                 level = RequestHealthLevel.ACTIVE,
-                message = "Lädt vorsichtig, um Sperren und Checkpoints zu vermeiden.",
+                message = if (profileLoadInProgress) {
+                    "Profil-Ladesession: Requests ohne Zwischen-Cooldown."
+                } else {
+                    "Lädt vorsichtig, um Sperren und Checkpoints zu vermeiden."
+                },
                 recentRequestCount = requestTimestamps.size,
                 cooldownUntilMillis = 0L,
                 lastUpdatedMillis = now

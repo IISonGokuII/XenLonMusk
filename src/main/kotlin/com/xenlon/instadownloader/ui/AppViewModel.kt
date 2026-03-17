@@ -295,55 +295,59 @@ class AppViewModel(private val appContext: Context) {
             _isOwnProfile.value = false
             _sharedPost.value = null
 
-            when (val result = instagramService.fetchUserProfile(username)) {
-                is DownloadResult.Success -> {
-                    _currentProfile.value = result.data
-                    _isSearchLoading.value = false
-                    val userId = result.data.userId
+            runCatching {
+                instagramService.runProfileLoadSession {
+                    when (val result = instagramService.fetchUserProfile(username)) {
+                        is DownloadResult.Success -> {
+                            _currentProfile.value = result.data
+                            val userId = result.data.userId
 
-                    // Add to search history and check watchlist
-                    addToSearchHistory(result.data)
-                    checkWatchlistStatus(username)
+                            // Add to search history and check watchlist
+                            addToSearchHistory(result.data)
+                            checkWatchlistStatus(username)
 
-                    // Check if this is the logged-in user's own profile
-                    val isOwn = !_isAnonymousMode.value &&
-                        instagramService.isAuthenticated() &&
-                        (username.equals(loggedInUsername, ignoreCase = true) ||
-                            userId == instagramService.getSessionUserId())
-                    _isOwnProfile.value = isOwn
+                            // Check if this is the logged-in user's own profile
+                            val isOwn = !_isAnonymousMode.value &&
+                                instagramService.isAuthenticated() &&
+                                (username.equals(loggedInUsername, ignoreCase = true) ||
+                                    userId == instagramService.getSessionUserId())
+                            _isOwnProfile.value = isOwn
 
-                    // Only fetch feed posts automatically (essential data)
-                    // Stories + Highlights load with small delay to avoid burst
-                    launch {
-                        _feedPosts.value = instagramService.fetchFeedPosts(username, userId)
-                    }
+                            // Load initial profile data as one complete session.
+                            _feedPosts.value = instagramService.fetchFeedPosts(username, userId)
 
-                    if (userId.isNotEmpty() && !_isAnonymousMode.value) {
-                        // Stagger stories and highlights with delay to reduce burst
-                        launch {
-                            kotlinx.coroutines.delay(1500)
-                            _stories.value = instagramService.fetchStories(userId)
+                            if (userId.isNotEmpty() && !_isAnonymousMode.value) {
+                                _stories.value = instagramService.fetchStories(userId)
+                                _highlights.value = instagramService.fetchHighlights(userId)
+                            }
+                            // Reels, tagged, archive, saved remain on-demand.
                         }
-                        launch {
-                            kotlinx.coroutines.delay(3000)
-                            _highlights.value = instagramService.fetchHighlights(userId)
+                        is DownloadResult.Error -> {
+                            _currentProfile.value = null
+                            _searchError.value = result.message
+                            _stories.value = DownloadResult.Error(result.message)
+                            _highlights.value = DownloadResult.Error(result.message)
+                            _feedPosts.value = DownloadResult.Error(result.message)
                         }
-                        // Reels, tagged, archive, saved are loaded on-demand only
-                        // to avoid triggering Instagram's automated behavior detection
+                        else -> Unit
                     }
                 }
-                is DownloadResult.Error -> {
-                    _currentProfile.value = null
-                    _isSearchLoading.value = false
-                    _searchError.value = result.message
-                    _stories.value = DownloadResult.Error(result.message)
-                    _highlights.value = DownloadResult.Error(result.message)
-                    _feedPosts.value = DownloadResult.Error(result.message)
-                }
-                else -> {
-                    _isSearchLoading.value = false
-                }
+            }.onFailure { throwable ->
+                _currentProfile.value = null
+                val message = throwable.message ?: "Unbekannter Fehler beim Laden des Profils"
+                _searchError.value = message
+                _stories.value = DownloadResult.Error(message)
+                _highlights.value = DownloadResult.Error(message)
+                _feedPosts.value = DownloadResult.Error(message)
+                DiagnosticsReporter.logWorkerFailure(
+                    label = "ProfileLoadSession",
+                    outputPath = "",
+                    reason = message,
+                    throwable = throwable
+                )
             }
+
+            _isSearchLoading.value = false
         }
     }
 
