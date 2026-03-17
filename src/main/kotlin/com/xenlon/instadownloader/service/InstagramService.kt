@@ -280,13 +280,22 @@ class InstagramService(
          * Lightweight CDN download - no session, no throttling, no cookie storage needed.
          * Use this for DownloadWorker to avoid creating a full InstagramService per download.
          */
-        suspend fun downloadCdnFile(url: String, outputPath: String): DownloadResult<String> = withContext(Dispatchers.IO) {
-            val cdnClient = HttpClient(OkHttp) {
+        // Shared CDN client – creating one per download wastes memory and threads.
+        private val cdnClient by lazy {
+            HttpClient(OkHttp) {
                 install(HttpTimeout) {
-                    requestTimeoutMillis = 60_000
-                    connectTimeoutMillis = 15_000
+                    requestTimeoutMillis = 120_000
+                    connectTimeoutMillis = 30_000
+                    socketTimeoutMillis = 60_000
                 }
             }
+        }
+
+        suspend fun downloadCdnFile(url: String, outputPath: String): DownloadResult<String> = withContext(Dispatchers.IO) {
+            if (url.isBlank() || !url.startsWith("http")) {
+                return@withContext DownloadResult.Error("Ungültige URL", 400)
+            }
+
             try {
                 val response = cdnClient.get(url) {
                     headers {
@@ -308,7 +317,10 @@ class InstagramService(
                 }
 
                 val file = java.io.File(outputPath)
-                file.parentFile?.mkdirs()
+                val parentDir = file.parentFile
+                if (parentDir != null && !parentDir.exists()) {
+                    parentDir.mkdirs()
+                }
                 val tempFile = java.io.File(
                     "${outputPath}.${System.currentTimeMillis()}_${Thread.currentThread().id}.part"
                 )
@@ -350,6 +362,8 @@ class InstagramService(
                 }
 
                 DownloadResult.Success(outputPath)
+            } catch (e: java.io.IOException) {
+                DownloadResult.Error("Netzwerk-Fehler: ${e.message}", 0)
             } catch (e: Exception) {
                 when (e) {
                     is HttpRequestTimeoutException -> DownloadResult.Error(
@@ -362,8 +376,6 @@ class InstagramService(
                     )
                     else -> DownloadResult.Error("Download-Fehler: ${e.message}")
                 }
-            } finally {
-                cdnClient.close()
             }
         }
 
@@ -1243,13 +1255,15 @@ class InstagramService(
                     ?: jsonResponse.stringAt("more_available")?.toBooleanStrictOrNull()
                     ?: (jsonResponse.stringAt("more_available") == "1")
                 val newMaxId = jsonResponse.stringAt("next_max_id")
-                if (newMaxId == maxId) break
+                if (newMaxId == null || newMaxId == maxId) break
                 maxId = newMaxId
 
                 if (allPosts.size >= 1200) break
             }
 
-            DownloadResult.Success(allPosts)
+            // Filter out posts with empty media URLs only at the end,
+            // so pagination counting is not affected
+            DownloadResult.Success(allPosts.filter { it.mediaUrls.isNotEmpty() })
         } catch (e: Exception) {
             DownloadResult.Error("Fehler beim Laden der Posts: ${e.message}")
         }

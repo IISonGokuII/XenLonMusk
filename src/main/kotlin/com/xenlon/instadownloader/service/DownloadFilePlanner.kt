@@ -17,9 +17,15 @@ object DownloadFilePlanner {
         mediaIndex: Int,
         isCarousel: Boolean,
         extension: String,
+        totalMediaInPost: Int = 1,
     ): String {
-        val carouselSuffix = if (isCarousel) "_${mediaIndex + 1}" else ""
-        return "${prefix}_${timestamp}_${shortcode}${carouselSuffix}.$extension"
+        // Always add media index when there's more than one media item,
+        // regardless of whether isCarousel flag is set.
+        // This prevents multiple carousel images from overwriting each other
+        // when media_type is not correctly parsed as 8 (carousel).
+        val needsIndex = isCarousel || totalMediaInPost > 1 || mediaIndex > 0
+        val indexSuffix = if (needsIndex) "_${mediaIndex + 1}" else ""
+        return "${prefix}_${timestamp}_${shortcode}${indexSuffix}.$extension"
     }
 
     fun buildProfilePictureFileName(username: String, extension: String): String {

@@ -16,11 +16,14 @@ class DownloadForegroundService : Service() {
 
     override fun onBind(intent: Intent?): IBinder? = null
 
+    private var isForegroundStarted = false
+
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         createChannel(this)
 
         when (intent?.action) {
             ACTION_STOP -> {
+                isForegroundStarted = false
                 foregroundStarted = false
                 stopForeground(STOP_FOREGROUND_REMOVE)
                 stopSelf()
@@ -33,17 +36,27 @@ class DownloadForegroundService : Service() {
                 val total = intent.getIntExtra(EXTRA_TOTAL, 0)
                 val notification = buildNotification(title, text, indeterminate, current, total)
 
-                if (intent.action == ACTION_START) {
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                        startForeground(
-                            NOTIFICATION_ID,
-                            notification,
-                            ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC,
-                        )
-                    } else {
-                        startForeground(NOTIFICATION_ID, notification)
+                // Always call startForeground first time, even for UPDATE action,
+                // because startForegroundService() requires it within 5 seconds
+                if (!isForegroundStarted) {
+                    try {
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                            startForeground(
+                                NOTIFICATION_ID,
+                                notification,
+                                ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC,
+                            )
+                        } else {
+                            startForeground(NOTIFICATION_ID, notification)
+                        }
+                        isForegroundStarted = true
+                        foregroundStarted = true
+                    } catch (e: Exception) {
+                        // Foreground service start can fail on some OEMs or when
+                        // app is in background too long - just update notification
+                        val manager = getSystemService(NotificationManager::class.java)
+                        manager.notify(NOTIFICATION_ID, notification)
                     }
-                    foregroundStarted = true
                 } else {
                     val manager = getSystemService(NotificationManager::class.java)
                     manager.notify(NOTIFICATION_ID, notification)
@@ -135,9 +148,9 @@ class DownloadForegroundService : Service() {
                 )
             }
 
-            val action = if (isActiveDownload && !foregroundStarted) ACTION_START else ACTION_UPDATE
+            // Always use ACTION_START so the service properly calls startForeground()
             val intent = Intent(context, DownloadForegroundService::class.java).apply {
-                this.action = action
+                this.action = ACTION_START
                 putExtra(EXTRA_TITLE, params.title)
                 putExtra(EXTRA_TEXT, params.text)
                 putExtra(EXTRA_CURRENT, params.current)
@@ -146,7 +159,7 @@ class DownloadForegroundService : Service() {
             }
 
             runCatching {
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && action == ACTION_START) {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                     context.startForegroundService(intent)
                 } else {
                     context.startService(intent)
@@ -162,10 +175,11 @@ class DownloadForegroundService : Service() {
         }
 
         fun stop(context: Context) {
-            val intent = Intent(context, DownloadForegroundService::class.java).apply {
-                action = ACTION_STOP
-            }
+            foregroundStarted = false
             runCatching {
+                val intent = Intent(context, DownloadForegroundService::class.java).apply {
+                    action = ACTION_STOP
+                }
                 context.startService(intent)
             }.onFailure { throwable ->
                 DiagnosticsReporter.logWorkerFailure(

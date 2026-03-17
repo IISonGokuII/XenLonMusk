@@ -358,6 +358,7 @@ class AppViewModel(private val appContext: Context) {
     /** Lazy-load reels when user scrolls to that section */
     fun loadReels() {
         val profile = _currentProfile.value ?: return
+        if (profile.userId.isEmpty()) return
         if (_reels.value != null) return
         scope.launch {
             _reels.value = DownloadResult.Loading
@@ -368,6 +369,7 @@ class AppViewModel(private val appContext: Context) {
     /** Lazy-load tagged posts when user scrolls to that section */
     fun loadTaggedPosts() {
         val profile = _currentProfile.value ?: return
+        if (profile.userId.isEmpty()) return
         if (_taggedPosts.value != null) return
         scope.launch {
             _taggedPosts.value = DownloadResult.Loading
@@ -605,13 +607,6 @@ class AppViewModel(private val appContext: Context) {
                 if (text.contains("instagram.com/", ignoreCase = true)) {
                     _clipboardUrl.value = text
                 }
-            }.onFailure { throwable ->
-                DiagnosticsReporter.logWorkerFailure(
-                    label = "ClipboardListener",
-                    outputPath = "",
-                    reason = throwable.message ?: "Clipboard access failed",
-                    throwable = throwable,
-                )
             }
         }
         runCatching {

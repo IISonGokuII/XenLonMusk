@@ -127,29 +127,13 @@ class DownloadWorker(
                 request
             }
 
-            // Enqueue downloads in small batches as parallel chains.
-            // Each batch runs concurrently (fast), but batches run sequentially
-            // to limit memory usage. WorkManager itself also limits concurrent
-            // workers, but batching prevents queuing hundreds of heavy tasks.
+            // Enqueue all downloads individually – no chaining, no unique work.
+            // This avoids APPEND_OR_REPLACE silently cancelling active downloads
+            // when a second batch is submitted while the first is still running.
+            // WorkManager itself limits concurrency (default 2-4 workers), so
+            // excess requests simply queue up without overloading the device.
             val workManager = WorkManager.getInstance(context)
-            val batchSize = 2 // Keep concurrency low to avoid memory spikes on large profiles
-            val batches = requests.chunked(batchSize)
-
-            if (batches.size <= 1) {
-                // Single batch: just enqueue all
-                requests.forEach { workManager.enqueue(it) }
-            } else {
-                // Chain batches: batch1 runs in parallel, then batch2, etc.
-                var continuation = workManager.beginUniqueWork(
-                    UNIQUE_QUEUE_NAME,
-                    ExistingWorkPolicy.APPEND_OR_REPLACE,
-                    batches.first(),
-                )
-                batches.drop(1).forEach { batch ->
-                    continuation = continuation.then(batch)
-                }
-                continuation.enqueue()
-            }
+            requests.forEach { workManager.enqueue(it) }
 
             return requests.map { it.id }
         }
@@ -235,8 +219,13 @@ class DownloadWorker(
             ?.let { runCatching { json.decodeFromString<DownloadedMediaMetadata>(it) }.getOrNull() }
 
         try {
-            // Show progress notification
-            setForeground(createForegroundInfo(label, 0))
+            // Show progress notification - wrapped in try/catch because setForeground
+            // can throw if the app is in background and foreground service can't start
+            try {
+                setForeground(createForegroundInfo(label, 0))
+            } catch (_: Exception) {
+                // Continue without foreground notification
+            }
             DiagnosticsReporter.logWorkerStart(label, outputPath, url)
 
             val result = InstagramService.downloadCdnFile(url, outputPath)
@@ -247,8 +236,7 @@ class DownloadWorker(
                     val downloadedFile = java.io.File(outputPath)
                     if (!downloadedFile.exists() || downloadedFile.length() <= 0L) {
                         DiagnosticsReporter.logMissingDownloadedFile(label, outputPath)
-                        showErrorNotification(label)
-                        return@withContext Result.failure()
+                        return@withContext Result.retry()
                     }
                     DiagnosticsReporter.logWorkerSuccess(label, outputPath)
                     showCompleteNotification(label)

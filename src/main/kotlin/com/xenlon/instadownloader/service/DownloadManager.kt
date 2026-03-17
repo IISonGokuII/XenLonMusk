@@ -70,12 +70,16 @@ class DownloadManager(
             DownloadForegroundService.createChannel(context)
             scope.launch {
                 _downloadProgress.collectLatest { progress ->
-                    when (progress) {
-                        is DownloadProgress.Downloading -> DownloadForegroundService.startOrUpdate(context, progress)
-                        is DownloadProgress.Queued -> DownloadForegroundService.startOrUpdate(context, progress)
-                        is DownloadProgress.Complete,
-                        is DownloadProgress.Error,
-                        DownloadProgress.Idle -> DownloadForegroundService.stop(context)
+                    try {
+                        when (progress) {
+                            is DownloadProgress.Downloading -> DownloadForegroundService.startOrUpdate(context, progress)
+                            is DownloadProgress.Queued -> DownloadForegroundService.startOrUpdate(context, progress)
+                            is DownloadProgress.Complete,
+                            is DownloadProgress.Error,
+                            DownloadProgress.Idle -> DownloadForegroundService.stop(context)
+                        }
+                    } catch (_: Exception) {
+                        // Service interaction can fail when app is backgrounded
                     }
                 }
             }
@@ -338,6 +342,7 @@ class DownloadManager(
                     mediaIndex = mediaIndex,
                     isCarousel = post.isCarousel,
                     extension = extension,
+                    totalMediaInPost = post.mediaUrls.size,
                 )
                 File(downloadDir, "${profile.username}/posts/$filename").absolutePath
             },
@@ -379,6 +384,7 @@ class DownloadManager(
                     mediaIndex = mediaIndex,
                     isCarousel = post.isCarousel,
                     extension = extension,
+                    totalMediaInPost = post.mediaUrls.size,
                 )
                 File(downloadDir, "$username/archive/$filename").absolutePath
             },
@@ -420,6 +426,7 @@ class DownloadManager(
                     mediaIndex = mediaIndex,
                     isCarousel = post.isCarousel,
                     extension = extension,
+                    totalMediaInPost = post.mediaUrls.size,
                 )
                 File(downloadDir, "${profile.username}/reels/$filename").absolutePath
             },
@@ -460,6 +467,7 @@ class DownloadManager(
                     mediaIndex = mediaIndex,
                     isCarousel = post.isCarousel,
                     extension = extension,
+                    totalMediaInPost = post.mediaUrls.size,
                 )
                 File(downloadDir, "saved/$filename").absolutePath
             },
@@ -500,6 +508,7 @@ class DownloadManager(
                     mediaIndex = mediaIndex,
                     isCarousel = post.isCarousel,
                     extension = extension,
+                    totalMediaInPost = post.mediaUrls.size,
                 )
                 File(downloadDir, "${profile.username}/tagged/$filename").absolutePath
             },
@@ -540,6 +549,7 @@ class DownloadManager(
                     mediaIndex = mediaIndex,
                     isCarousel = currentPost.isCarousel,
                     extension = extension,
+                    totalMediaInPost = currentPost.mediaUrls.size,
                 )
                 File(downloadDir, "shared/$filename").absolutePath
             },
