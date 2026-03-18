@@ -3,6 +3,7 @@ package com.xenlon.instadownloader.ui
 import androidx.compose.animation.*
 import androidx.compose.foundation.*
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.pager.HorizontalPager
@@ -132,18 +133,24 @@ fun MainScreen(
     onOpenStats: () -> Unit = {},
     onOpenWatchlist: () -> Unit = {},
     onDownloadAllContent: () -> Unit = {},
+    onBulkImport: (List<String>) -> Unit = {},
     isOnWatchlist: Boolean = false,
     onToggleWatchlist: () -> Unit = {},
+    isAmoledTheme: Boolean = false,
+    onToggleAmoledTheme: () -> Unit = {},
+    onOpenStorage: () -> Unit = {},
+    onOpenHistory: () -> Unit = {},
 ) {
     var searchQuery by remember { mutableStateOf("") }
     var profileSearchQuery by remember(profile?.username) { mutableStateOf("") }
     var selectedSectionTab by remember(profile?.username) { mutableStateOf("posts") }
     var contentSortMode by remember(profile?.username) { mutableStateOf(ContentSortMode.NEWEST) }
+    var showBulkImportDialog by remember { mutableStateOf(false) }
 
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .background(DarkBackground)
+            .background(androidx.compose.material3.MaterialTheme.colorScheme.background)
     ) {
         // Top bar
         TopAppBar(
@@ -187,6 +194,12 @@ fun MainScreen(
                 }
                 IconButton(onClick = onOpenStats) {
                     Icon(Icons.Default.BarChart, "Statistiken", tint = TextSecondary)
+                }
+                IconButton(onClick = onOpenStorage) {
+                    Icon(Icons.Default.Storage, "Speicher", tint = TextSecondary)
+                }
+                IconButton(onClick = onOpenHistory) {
+                    Icon(Icons.Default.History, "Verlauf", tint = TextSecondary)
                 }
                 IconButton(onClick = onOpenQueue) {
                     Icon(Icons.Default.PendingActions, "Queue", tint = TextSecondary)
@@ -463,6 +476,48 @@ fun MainScreen(
                 }
             }
 
+            // AMOLED Theme toggle
+            Card(
+                shape = RoundedCornerShape(14.dp),
+                colors = CardDefaults.cardColors(containerColor = DarkSurface)
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(
+                            Icons.Default.DarkMode,
+                            contentDescription = null,
+                            tint = if (isAmoledTheme) AccentPink else TextSecondary,
+                            modifier = Modifier.size(20.dp)
+                        )
+                        Spacer(modifier = Modifier.width(10.dp))
+                        Column {
+                            Text(
+                                "AMOLED Black",
+                                color = TextPrimary,
+                                fontSize = 14.sp,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                            Text(
+                                "Tiefschwarzer Hintergrund fuer AMOLED-Displays",
+                                color = TextSecondary,
+                                fontSize = 12.sp,
+                                lineHeight = 16.sp
+                            )
+                        }
+                    }
+                    Switch(
+                        checked = isAmoledTheme,
+                        onCheckedChange = { onToggleAmoledTheme() }
+                    )
+                }
+            }
+
             // Search bar
             SearchBar(
                 query = searchQuery,
@@ -474,6 +529,30 @@ fun MainScreen(
                 },
                 isSearching = isSearchLoading
             )
+
+            // Bulk import button
+            OutlinedButton(
+                onClick = { showBulkImportDialog = true },
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(12.dp),
+                colors = ButtonDefaults.outlinedButtonColors(contentColor = AccentPurple),
+                border = BorderStroke(1.dp, AccentPurple.copy(alpha = 0.3f))
+            ) {
+                Icon(Icons.Default.GroupAdd, contentDescription = null, modifier = Modifier.size(18.dp))
+                Spacer(modifier = Modifier.width(8.dp))
+                Text("Mehrere Profile importieren", fontSize = 13.sp)
+            }
+
+            // Bulk import dialog
+            if (showBulkImportDialog) {
+                BulkImportDialog(
+                    onDismiss = { showBulkImportDialog = false },
+                    onImport = { usernames ->
+                        showBulkImportDialog = false
+                        onBulkImport(usernames)
+                    }
+                )
+            }
 
             // Search error message
             if (searchError != null) {
@@ -2020,49 +2099,72 @@ private fun StoriesSection(
                             horizontalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
                             items(items) { story ->
-                                Box(
-                                    modifier = Modifier
-                                        .size(72.dp)
-                                        .clip(RoundedCornerShape(12.dp))
-                                        .background(DarkSurfaceVariant)
-                                        .border(
-                                            2.dp,
-                                            Brush.linearGradient(
-                                                colors = listOf(InstagramPink, InstagramOrange, InstagramYellow)
-                                            ),
-                                            RoundedCornerShape(12.dp)
-                                        )
+                                val now = System.currentTimeMillis() / 1000L
+                                val expiresIn = if (story.expiringAt > 0) story.expiringAt - now else 0L
+                                val isExpiringSoon = expiresIn in 1..7200 // < 2 hours
+                                val borderColors = if (isExpiringSoon) {
+                                    listOf(ErrorRed, WarningOrange)
+                                } else {
+                                    listOf(InstagramPink, InstagramOrange, InstagramYellow)
+                                }
+
+                                Column(
+                                    horizontalAlignment = Alignment.CenterHorizontally
                                 ) {
-                                    val thumbUrl = story.thumbnailUrl.ifEmpty { story.mediaUrl }
-                                    AsyncImage(
-                                        model = ImageRequest.Builder(context)
-                                            .data(thumbUrl)
-                                            .crossfade(true)
-                                            .build(),
-                                        contentDescription = "Story",
+                                    Box(
                                         modifier = Modifier
-                                            .fillMaxSize()
-                                            .padding(2.dp)
-                                            .clip(RoundedCornerShape(10.dp)),
-                                        contentScale = ContentScale.Crop
-                                    )
-                                    if (story.type == MediaType.VIDEO) {
-                                        Box(
-                                            modifier = Modifier
-                                                .align(Alignment.BottomEnd)
-                                                .padding(4.dp)
-                                                .size(16.dp)
-                                                .clip(CircleShape)
-                                                .background(Color.Black.copy(alpha = 0.7f)),
-                                            contentAlignment = Alignment.Center
-                                        ) {
-                                            Icon(
-                                                Icons.Default.PlayArrow,
-                                                contentDescription = null,
-                                                tint = Color.White,
-                                                modifier = Modifier.size(12.dp)
+                                            .size(72.dp)
+                                            .clip(RoundedCornerShape(12.dp))
+                                            .background(DarkSurfaceVariant)
+                                            .border(
+                                                2.dp,
+                                                Brush.linearGradient(colors = borderColors),
+                                                RoundedCornerShape(12.dp)
                                             )
+                                    ) {
+                                        val thumbUrl = story.thumbnailUrl.ifEmpty { story.mediaUrl }
+                                        AsyncImage(
+                                            model = ImageRequest.Builder(context)
+                                                .data(thumbUrl)
+                                                .crossfade(true)
+                                                .build(),
+                                            contentDescription = "Story",
+                                            modifier = Modifier
+                                                .fillMaxSize()
+                                                .padding(2.dp)
+                                                .clip(RoundedCornerShape(10.dp)),
+                                            contentScale = ContentScale.Crop
+                                        )
+                                        if (story.type == MediaType.VIDEO) {
+                                            Box(
+                                                modifier = Modifier
+                                                    .align(Alignment.BottomEnd)
+                                                    .padding(4.dp)
+                                                    .size(16.dp)
+                                                    .clip(CircleShape)
+                                                    .background(Color.Black.copy(alpha = 0.7f)),
+                                                contentAlignment = Alignment.Center
+                                            ) {
+                                                Icon(
+                                                    Icons.Default.PlayArrow,
+                                                    contentDescription = null,
+                                                    tint = Color.White,
+                                                    modifier = Modifier.size(12.dp)
+                                                )
+                                            }
                                         }
+                                    }
+                                    // Countdown timer
+                                    if (story.expiringAt > 0 && expiresIn > 0) {
+                                        val hours = expiresIn / 3600
+                                        val minutes = (expiresIn % 3600) / 60
+                                        val timeText = if (hours > 0) "${hours}h ${minutes}m" else "${minutes}m"
+                                        Text(
+                                            text = timeText,
+                                            fontSize = 9.sp,
+                                            color = if (isExpiringSoon) ErrorRed else TextSecondary,
+                                            fontWeight = if (isExpiringSoon) FontWeight.Bold else FontWeight.Normal
+                                        )
                                     }
                                 }
                             }
@@ -3297,4 +3399,86 @@ private fun sortFeedPosts(posts: List<FeedPost>, mode: ContentSortMode): List<Fe
     ContentSortMode.MOST_LIKED -> posts.sortedWith(
         compareByDescending<FeedPost> { it.likeCount }.thenByDescending { it.timestamp }
     )
+}
+
+@Composable
+private fun BulkImportDialog(
+    onDismiss: () -> Unit,
+    onImport: (List<String>) -> Unit
+) {
+    var inputText by remember { mutableStateOf("") }
+
+    Dialog(onDismissRequest = onDismiss) {
+        Card(
+            shape = RoundedCornerShape(20.dp),
+            colors = CardDefaults.cardColors(containerColor = DarkSurface)
+        ) {
+            Column(
+                modifier = Modifier.padding(24.dp),
+                verticalArrangement = Arrangement.spacedBy(16.dp)
+            ) {
+                Text(
+                    "Mehrere Profile importieren",
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 18.sp,
+                    color = TextPrimary
+                )
+                Text(
+                    "Benutzernamen eingeben, getrennt durch Komma oder Zeilenumbruch:",
+                    fontSize = 13.sp,
+                    color = TextSecondary
+                )
+                OutlinedTextField(
+                    value = inputText,
+                    onValueChange = { inputText = it },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(120.dp),
+                    placeholder = { Text("user1, user2, user3", color = TextSecondary.copy(alpha = 0.5f)) },
+                    shape = RoundedCornerShape(12.dp),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = AccentPink,
+                        unfocusedBorderColor = Color(0xFF444458),
+                        focusedTextColor = TextPrimary,
+                        unfocusedTextColor = TextPrimary,
+                        cursorColor = AccentPink
+                    )
+                )
+
+                val usernames = remember(inputText) {
+                    inputText.split(",", "\n", ";")
+                        .map { it.trim().removePrefix("@") }
+                        .filter { it.isNotBlank() }
+                        .distinct()
+                }
+
+                if (usernames.isNotEmpty()) {
+                    Text(
+                        "${usernames.size} Profile erkannt",
+                        fontSize = 12.sp,
+                        color = SuccessGreen
+                    )
+                }
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.End,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    TextButton(onClick = onDismiss) {
+                        Text("Abbrechen", color = TextSecondary)
+                    }
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Button(
+                        onClick = { onImport(usernames) },
+                        enabled = usernames.isNotEmpty(),
+                        shape = RoundedCornerShape(12.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = AccentPink)
+                    ) {
+                        Text("Starten")
+                    }
+                }
+            }
+        }
+    }
 }

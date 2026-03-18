@@ -102,12 +102,12 @@ fun QueueScreen(
                 )
             )
         },
-        containerColor = DarkBackground
+        containerColor = androidx.compose.material3.MaterialTheme.colorScheme.background
     ) { padding ->
         LazyColumn(
             modifier = Modifier
                 .fillMaxSize()
-                .background(DarkBackground)
+                .background(androidx.compose.material3.MaterialTheme.colorScheme.background)
                 .padding(padding),
             contentPadding = PaddingValues(20.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp)

@@ -9,6 +9,7 @@ import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.calculatePan
 import androidx.compose.foundation.gestures.calculateZoom
+import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
@@ -23,6 +24,7 @@ import androidx.compose.material.icons.automirrored.filled.Sort
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -281,7 +283,7 @@ fun GalleryScreen(
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .background(DarkBackground)
+            .background(androidx.compose.material3.MaterialTheme.colorScheme.background)
     ) {
         TopAppBar(
             title = {
@@ -610,7 +612,7 @@ private fun UserFolderScreen(
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .background(DarkBackground)
+            .background(androidx.compose.material3.MaterialTheme.colorScheme.background)
     ) {
         TopAppBar(
             title = {
@@ -996,14 +998,38 @@ private fun GalleryPagerViewer(
 
     var saved by remember { mutableStateOf(false) }
 
+    // Swipe-to-dismiss: vertical drag offset
+    var dismissOffsetY by remember { mutableFloatStateOf(0f) }
+    val dismissThreshold = 300f
+
     // Reset saved state when page changes
     LaunchedEffect(pagerState.currentPage) {
         saved = false
     }
 
+    val dismissAlpha = (1f - (kotlin.math.abs(dismissOffsetY) / dismissThreshold * 0.5f)).coerceIn(0.3f, 1f)
+
     Column(
         modifier = Modifier
             .fillMaxSize()
+            .graphicsLayer {
+                translationY = dismissOffsetY
+                alpha = dismissAlpha
+            }
+            .pointerInput(Unit) {
+                detectVerticalDragGestures(
+                    onDragEnd = {
+                        if (kotlin.math.abs(dismissOffsetY) > dismissThreshold) {
+                            onDismiss()
+                        }
+                        dismissOffsetY = 0f
+                    },
+                    onDragCancel = { dismissOffsetY = 0f },
+                    onVerticalDrag = { _, dragAmount ->
+                        dismissOffsetY += dragAmount
+                    }
+                )
+            }
             .background(Color.Black)
     ) {
         // Top bar

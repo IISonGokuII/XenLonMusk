@@ -49,7 +49,7 @@ fun LoginScreen(
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(DarkBackground),
+            .background(androidx.compose.material3.MaterialTheme.colorScheme.background),
         contentAlignment = Alignment.Center
     ) {
         Card(

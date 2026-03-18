@@ -32,7 +32,7 @@ fun StatsScreen(
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .background(DarkBackground)
+            .background(androidx.compose.material3.MaterialTheme.colorScheme.background)
     ) {
         TopAppBar(
             title = {

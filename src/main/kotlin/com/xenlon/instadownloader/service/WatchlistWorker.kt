@@ -132,9 +132,41 @@ class WatchlistWorker(
 
             saveWatchlist(applicationContext, updatedEntries)
 
+            // Auto-download for profiles with autoDownload enabled
+            val autoDownloadEntries = entries.filter { it.autoDownload }
+            val autoDownloadResults = results.filter { result ->
+                autoDownloadEntries.any { it.username.equals(result.username, ignoreCase = true) }
+            }
+            if (autoDownloadResults.isNotEmpty()) {
+                val downloadManager = DownloadManager(service, applicationContext)
+                for (result in autoDownloadResults) {
+                    val entry = autoDownloadEntries.first { it.username.equals(result.username, ignoreCase = true) }
+                    try {
+                        if (result.newStoryCount > 0 && entry.checkStories && entry.userId.isNotEmpty()) {
+                            val storiesResult = service.fetchStories(entry.userId)
+                            if (storiesResult is DownloadResult.Success) {
+                                val profileResult = service.fetchUserProfile(entry.username)
+                                if (profileResult is DownloadResult.Success) {
+                                    downloadManager.downloadStories(profileResult.data, storiesResult.data)
+                                }
+                            }
+                        }
+                    } catch (_: Exception) { /* continue with next */ }
+                }
+                downloadManager.close()
+            }
+
             // Send notification for profiles with new content
-            if (results.isNotEmpty()) {
-                sendNotification(results)
+            val notifyResults = results.filter { result ->
+                // Don't notify for auto-downloaded content
+                !autoDownloadEntries.any { it.username.equals(result.username, ignoreCase = true) }
+            }
+            if (notifyResults.isNotEmpty()) {
+                sendNotification(notifyResults)
+            }
+            // Notify auto-downloads separately
+            if (autoDownloadResults.isNotEmpty()) {
+                sendAutoDownloadNotification(autoDownloadResults)
             }
 
             Result.success()
@@ -240,6 +272,25 @@ class WatchlistWorker(
 
         val manager = applicationContext.getSystemService(NotificationManager::class.java)
         manager.notify(NOTIFICATION_ID_BASE, notification)
+    }
+
+    private fun sendAutoDownloadNotification(results: List<WatchlistCheckResult>) {
+        createNotificationChannel()
+
+        val text = results.joinToString("\n") { result ->
+            "@${result.username}: ${result.newStoryCount} Stories auto-heruntergeladen"
+        }
+
+        val notification = NotificationCompat.Builder(applicationContext, CHANNEL_ID)
+            .setContentTitle("Auto-Download abgeschlossen")
+            .setContentText(text)
+            .setStyle(NotificationCompat.BigTextStyle().bigText(text))
+            .setSmallIcon(android.R.drawable.stat_sys_download_done)
+            .setAutoCancel(true)
+            .build()
+
+        val manager = applicationContext.getSystemService(NotificationManager::class.java)
+        manager.notify(NOTIFICATION_ID_BASE + 1, notification)
     }
 
     private fun createNotificationChannel() {

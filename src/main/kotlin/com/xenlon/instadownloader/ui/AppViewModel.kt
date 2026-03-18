@@ -21,6 +21,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.serialization.decodeFromString
+import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.*
 import java.io.File
 import java.text.SimpleDateFormat
@@ -53,8 +55,7 @@ class AppViewModel(private val appContext: Context) {
     private val fileNameTimestampFormat = SimpleDateFormat("yyyy-MM-dd_HH-mm-ss", Locale.getDefault())
     private val profileCooldownOptionsMillis = listOf(15_000L, 30_000L, 60_000L, 120_000L, 180_000L)
 
-    // Screen state
-    enum class Screen { LOGIN, MAIN, GALLERY, QUEUE, STATS, BROWSER, WATCHLIST }
+    // Screen state – enum is declared near the bottom of this class
 
     private val _currentScreen = MutableStateFlow(Screen.LOGIN)
     val currentScreen: StateFlow<Screen> = _currentScreen.asStateFlow()
@@ -1318,6 +1319,16 @@ class AppViewModel(private val appContext: Context) {
         }
     }
 
+    fun toggleWatchlistAutoDownload(username: String) {
+        val entries = WatchlistWorker.loadWatchlist(appContext).toMutableList()
+        val idx = entries.indexOfFirst { it.username.equals(username, ignoreCase = true) }
+        if (idx >= 0) {
+            entries[idx] = entries[idx].copy(autoDownload = !entries[idx].autoDownload)
+            WatchlistWorker.saveWatchlist(appContext, entries)
+            loadWatchlist()
+        }
+    }
+
     fun openProfileFromWatchlist(username: String) {
         _currentScreen.value = Screen.MAIN
         searchUser(username)
@@ -1331,6 +1342,196 @@ class AppViewModel(private val appContext: Context) {
     }
 
     fun closeStats() {
+        _currentScreen.value = Screen.MAIN
+    }
+
+    // --- Bulk Import ---
+
+    fun bulkImport(usernames: List<String>) {
+        scope.launch {
+            for (username in usernames) {
+                val trimmed = username.trim().removePrefix("@")
+                if (trimmed.isBlank()) continue
+                searchUser(trimmed)
+                // Wait briefly for profile to load before downloading
+                delay(2000)
+                downloadAllContent()
+                delay(1000)
+            }
+        }
+    }
+
+    // --- AMOLED Theme ---
+
+    private val _isAmoledTheme = MutableStateFlow(prefs.getBoolean("amoled_theme", false))
+    val isAmoledTheme: StateFlow<Boolean> = _isAmoledTheme.asStateFlow()
+
+    fun toggleAmoledTheme() {
+        val newValue = !_isAmoledTheme.value
+        _isAmoledTheme.value = newValue
+        prefs.edit().putBoolean("amoled_theme", newValue).apply()
+    }
+
+    // --- Download History ---
+
+    private val _downloadHistory = MutableStateFlow<List<DownloadHistoryEntry>>(emptyList())
+    val downloadHistory: StateFlow<List<DownloadHistoryEntry>> = _downloadHistory.asStateFlow()
+
+    fun loadDownloadHistory() {
+        val raw = prefs.getString("download_history", null) ?: return
+        runCatching {
+            _downloadHistory.value = json.decodeFromString<List<DownloadHistoryEntry>>(raw)
+        }
+    }
+
+    fun addDownloadHistoryEntry(username: String, category: String, itemCount: Int, label: String) {
+        val entry = DownloadHistoryEntry(
+            timestamp = System.currentTimeMillis(),
+            username = username,
+            category = category,
+            itemCount = itemCount,
+            label = label,
+        )
+        val updated = listOf(entry) + _downloadHistory.value.take(499)
+        _downloadHistory.value = updated
+        prefs.edit().putString("download_history",
+            json.encodeToString(updated)
+        ).apply()
+    }
+
+    fun clearDownloadHistory() {
+        _downloadHistory.value = emptyList()
+        prefs.edit().remove("download_history").apply()
+    }
+
+    // --- Storage Manager ---
+
+    data class StorageInfo(
+        val totalSizeBytes: Long = 0,
+        val perUserSize: Map<String, Long> = emptyMap(),
+        val perCategorySize: Map<String, Long> = emptyMap(),
+        val fileCount: Int = 0,
+    )
+
+    private val _storageInfo = MutableStateFlow(StorageInfo())
+    val storageInfo: StateFlow<StorageInfo> = _storageInfo.asStateFlow()
+
+    fun loadStorageInfo() {
+        scope.launch(Dispatchers.IO) {
+            val dir = File(downloadManager.getDownloadDir())
+            if (!dir.exists()) {
+                _storageInfo.value = StorageInfo()
+                return@launch
+            }
+
+            var total = 0L
+            val perUser = mutableMapOf<String, Long>()
+            val perCategory = mutableMapOf<String, Long>()
+            var count = 0
+
+            dir.walkTopDown()
+                .filter { it.isFile && !it.name.endsWith(".meta.json") && !it.name.startsWith(".") }
+                .forEach { file ->
+                    val size = file.length()
+                    total += size
+                    count++
+                    val relativePath = file.relativeTo(dir).path
+                    val parts = relativePath.split(File.separator)
+                    val username = if (parts.size >= 2) parts[0] else "Andere"
+                    val category = if (parts.size >= 3) parts[1] else "posts"
+                    perUser[username] = (perUser[username] ?: 0) + size
+                    perCategory[category] = (perCategory[category] ?: 0) + size
+                }
+
+            _storageInfo.value = StorageInfo(
+                totalSizeBytes = total,
+                perUserSize = perUser.toList().sortedByDescending { it.second }.toMap(),
+                perCategorySize = perCategory,
+                fileCount = count,
+            )
+        }
+    }
+
+    fun deleteUserDownloads(username: String) {
+        scope.launch(Dispatchers.IO) {
+            val dir = File(downloadManager.getDownloadDir(), username)
+            if (dir.exists()) {
+                dir.deleteRecursively()
+            }
+            loadStorageInfo()
+            loadGalleryItems()
+        }
+    }
+
+    // --- Custom Albums ---
+
+    private val _customAlbums = MutableStateFlow<List<CustomAlbum>>(emptyList())
+    val customAlbums: StateFlow<List<CustomAlbum>> = _customAlbums.asStateFlow()
+
+    fun loadCustomAlbums() {
+        val raw = prefs.getString("custom_albums", null) ?: return
+        runCatching {
+            _customAlbums.value = json.decodeFromString<List<CustomAlbum>>(raw)
+        }
+    }
+
+    private fun saveCustomAlbums() {
+        prefs.edit().putString("custom_albums",
+            json.encodeToString(_customAlbums.value)
+        ).apply()
+    }
+
+    fun createAlbum(name: String) {
+        val album = CustomAlbum(
+            id = UUID.randomUUID().toString(),
+            name = name,
+        )
+        _customAlbums.value = _customAlbums.value + album
+        saveCustomAlbums()
+    }
+
+    fun deleteAlbum(albumId: String) {
+        _customAlbums.value = _customAlbums.value.filter { it.id != albumId }
+        saveCustomAlbums()
+    }
+
+    fun addToAlbum(albumId: String, filePaths: List<String>) {
+        _customAlbums.value = _customAlbums.value.map { album ->
+            if (album.id == albumId) {
+                album.copy(filePaths = (album.filePaths + filePaths).distinct())
+            } else album
+        }
+        saveCustomAlbums()
+    }
+
+    fun removeFromAlbum(albumId: String, filePath: String) {
+        _customAlbums.value = _customAlbums.value.map { album ->
+            if (album.id == albumId) {
+                album.copy(filePaths = album.filePaths.filter { it != filePath })
+            } else album
+        }
+        saveCustomAlbums()
+    }
+
+    // --- Screen: Storage Manager & Download History ---
+
+    enum class Screen { LOGIN, MAIN, GALLERY, QUEUE, STATS, BROWSER, WATCHLIST, STORAGE, HISTORY }
+
+    fun openStorage() {
+        loadStorageInfo()
+        _currentScreen.value = Screen.STORAGE
+    }
+
+    fun closeStorage() {
+        _currentScreen.value = Screen.MAIN
+    }
+
+    fun openHistory() {
+        loadDownloadHistory()
+        _currentScreen.value = Screen.HISTORY
+    }
+
+    fun closeHistory() {
         _currentScreen.value = Screen.MAIN
     }
 

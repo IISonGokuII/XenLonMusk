@@ -67,7 +67,7 @@ fun BrowserScreen(
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .background(DarkBackground)
+            .background(androidx.compose.material3.MaterialTheme.colorScheme.background)
     ) {
         // Top bar
         TopAppBar(

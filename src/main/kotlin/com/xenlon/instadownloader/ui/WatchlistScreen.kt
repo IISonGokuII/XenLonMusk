@@ -33,6 +33,7 @@ fun WatchlistScreen(
     onBack: () -> Unit,
     onRemove: (String) -> Unit,
     onToggleEnabled: (String) -> Unit,
+    onToggleAutoDownload: (String) -> Unit = {},
     onOpenProfile: (String) -> Unit,
 ) {
     val dateFormat = remember { SimpleDateFormat("dd.MM.yyyy HH:mm", Locale.GERMANY) }
@@ -40,7 +41,7 @@ fun WatchlistScreen(
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .background(DarkBackground)
+            .background(androidx.compose.material3.MaterialTheme.colorScheme.background)
     ) {
         TopAppBar(
             title = {
@@ -142,6 +143,7 @@ fun WatchlistScreen(
                         dateFormat = dateFormat,
                         onRemove = { onRemove(entry.username) },
                         onToggleEnabled = { onToggleEnabled(entry.username) },
+                        onToggleAutoDownload = { onToggleAutoDownload(entry.username) },
                         onOpenProfile = { onOpenProfile(entry.username) }
                     )
                 }
@@ -178,6 +180,7 @@ private fun WatchlistEntryCard(
     dateFormat: SimpleDateFormat,
     onRemove: () -> Unit,
     onToggleEnabled: () -> Unit,
+    onToggleAutoDownload: () -> Unit = {},
     onOpenProfile: () -> Unit,
 ) {
     Card(
@@ -261,6 +264,47 @@ private fun WatchlistEntryCard(
                 if (entry.checkReels) {
                     MonitoringChip("Reels", Icons.Default.VideoLibrary)
                 }
+            }
+
+            // Auto-download toggle
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Icon(
+                        Icons.Default.CloudDownload,
+                        contentDescription = null,
+                        tint = if (entry.autoDownload) SuccessGreen else TextSecondary,
+                        modifier = Modifier.size(18.dp)
+                    )
+                    Column {
+                        Text(
+                            "Auto-Download",
+                            fontSize = 13.sp,
+                            color = TextPrimary,
+                            fontWeight = FontWeight.Medium
+                        )
+                        Text(
+                            if (entry.autoDownload) "Neue Inhalte automatisch herunterladen"
+                            else "Nur benachrichtigen",
+                            fontSize = 11.sp,
+                            color = TextSecondary
+                        )
+                    }
+                }
+                Switch(
+                    checked = entry.autoDownload,
+                    onCheckedChange = { onToggleAutoDownload() },
+                    colors = SwitchDefaults.colors(
+                        checkedThumbColor = Color.White,
+                        checkedTrackColor = SuccessGreen
+                    )
+                )
             }
 
             // Last check & known counts

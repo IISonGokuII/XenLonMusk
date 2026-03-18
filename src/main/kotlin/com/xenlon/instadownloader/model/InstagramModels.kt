@@ -191,6 +191,7 @@ data class WatchlistEntry(
     val profilePicUrl: String = "",
     val fullName: String = "",
     val enabled: Boolean = true,
+    val autoDownload: Boolean = false,
     val checkStories: Boolean = true,
     val checkPosts: Boolean = true,
     val checkReels: Boolean = false,
@@ -229,6 +230,29 @@ data class UserDownloadStats(
     val downloadCount: Int = 0,
     val totalSizeBytes: Long = 0,
     val categories: Map<String, Int> = emptyMap(),
+)
+
+/**
+ * A single download history entry for the timeline.
+ */
+@Serializable
+data class DownloadHistoryEntry(
+    val timestamp: Long = System.currentTimeMillis(),
+    val username: String = "",
+    val category: String = "",
+    val itemCount: Int = 1,
+    val label: String = "",
+)
+
+/**
+ * A user-created album/collection for organizing downloads.
+ */
+@Serializable
+data class CustomAlbum(
+    val id: String,
+    val name: String,
+    val createdAt: Long = System.currentTimeMillis(),
+    val filePaths: List<String> = emptyList(),
 )
 
 // --- JSON response models for Instagram's public API ---

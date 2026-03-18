@@ -41,7 +41,8 @@ class MainActivity : ComponentActivity() {
         handleIntent(intent)
 
         setContent {
-            InstaDownloaderTheme {
+            val isAmoled by viewModel.isAmoledTheme.collectAsState()
+            InstaDownloaderTheme(isAmoled = isAmoled) {
                 val currentScreen by viewModel.currentScreen.collectAsState()
                 val isLoginLoading by viewModel.isLoginLoading.collectAsState()
                 val loginError by viewModel.loginError.collectAsState()
@@ -150,10 +151,15 @@ class MainActivity : ComponentActivity() {
                             onOpenStats = { viewModel.openStats() },
                             onOpenWatchlist = { viewModel.openWatchlist() },
                             onDownloadAllContent = { viewModel.downloadAllContent() },
+                            onBulkImport = { viewModel.bulkImport(it) },
                             isOnWatchlist = viewModel.isOnWatchlist.collectAsState().value,
                             onToggleWatchlist = {
                                 currentProfile?.let { viewModel.toggleWatchlist(it) }
-                            }
+                            },
+                            isAmoledTheme = isAmoled,
+                            onToggleAmoledTheme = { viewModel.toggleAmoledTheme() },
+                            onOpenStorage = { viewModel.openStorage() },
+                            onOpenHistory = { viewModel.openHistory() },
                         )
                     }
 
@@ -223,6 +229,7 @@ class MainActivity : ComponentActivity() {
                             onBack = { viewModel.closeWatchlist() },
                             onRemove = { viewModel.removeFromWatchlist(it) },
                             onToggleEnabled = { viewModel.toggleWatchlistEnabled(it) },
+                            onToggleAutoDownload = { viewModel.toggleWatchlistAutoDownload(it) },
                             onOpenProfile = { viewModel.openProfileFromWatchlist(it) }
                         )
                     }
@@ -231,6 +238,27 @@ class MainActivity : ComponentActivity() {
                         BrowserScreen(
                             onBack = { viewModel.closeBrowser() },
                             onDownloadUrl = { url -> viewModel.handleBrowserDownload(url) }
+                        )
+                    }
+
+                    AppViewModel.Screen.STORAGE -> {
+                        val storageInfo by viewModel.storageInfo.collectAsState()
+                        StorageScreen(
+                            totalSizeBytes = storageInfo.totalSizeBytes,
+                            perUserSize = storageInfo.perUserSize,
+                            perCategorySize = storageInfo.perCategorySize,
+                            fileCount = storageInfo.fileCount,
+                            onBack = { viewModel.closeStorage() },
+                            onDeleteUser = { viewModel.deleteUserDownloads(it) },
+                        )
+                    }
+
+                    AppViewModel.Screen.HISTORY -> {
+                        val history by viewModel.downloadHistory.collectAsState()
+                        DownloadHistoryScreen(
+                            entries = history,
+                            onBack = { viewModel.closeHistory() },
+                            onClear = { viewModel.clearDownloadHistory() },
                         )
                     }
                 }
